@@ -106,6 +106,7 @@ void psx_protocol_task(void) {
             continue;
         }
         
+        // Count all transactions (valid or invalid)
         stats.total_transactions++;
         
         // CRITICAL: Check for memory card FIRST and immediately release bus
@@ -155,13 +156,27 @@ void psx_protocol_task(void) {
                 continue;
             }
             
-            // Wait for PSX to prepare for CMD transmission after ACK
-            // PSX: detect ACK → update internal state → start sending CLK
-            // This can take up to ~10-15µs for some PSX hardware
-            busy_wait_us_32(20);
+#if ACK_AUTO_TUNE_ENABLED
+            // Report address byte received for auto-tuning
+            extern void psx_ack_tune_on_address(void);
+            psx_ack_tune_on_address();
+            
+            // Wait for PSX to prepare for CMD transmission after ACK (auto-tuned)
+            extern uint32_t psx_ack_get_post_wait(void);
+            busy_wait_us_32(psx_ack_get_post_wait());
+#else
+            // Fixed wait time
+            busy_wait_us_32(50);
+#endif
             
             // Now start responding: receive command byte while sending controller ID low byte
             uint8_t cmd = psx_transfer_byte(PSX_ID_DIGITAL_LO);
+            
+#if ACK_AUTO_TUNE_ENABLED
+            // Report command byte result for auto-tuning
+            extern void psx_ack_tune_on_command(bool cmd_success);
+            psx_ack_tune_on_command(cmd != 0xFF);
+#endif
             
             // Disable SEL interrupt briefly - no debug output here, timing critical!
             gpio_set_irq_enabled(PIN_SEL, GPIO_IRQ_EDGE_RISE, false);
@@ -216,7 +231,8 @@ void psx_protocol_task(void) {
                 shared_state_read(&btn1, &btn2);
                 
                 // Process poll command (0x42) - only command we support
-                handle_poll_command(btn1, btn2);
+                bool success = handle_poll_command(btn1, btn2);
+                (void)success;  // Suppress unused variable warning
             } else {
                 // Ignore all other commands (Config mode commands, etc.)
                 // Digital controller doesn't need to respond to Config mode

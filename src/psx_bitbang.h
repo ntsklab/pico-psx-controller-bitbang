@@ -21,6 +21,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "config.h"
 
 // ============================================================================
 // PSX Bit-Banging Low-Level Functions
@@ -65,5 +66,32 @@ uint8_t psx_transfer_byte(uint8_t data_out);
 
 // Release bus completely (both DAT and ACK to Hi-Z)
 void psx_release_bus(void);
+
+// ============================================================================
+// ACK Auto-Tuning Functions (only available if ACK_AUTO_TUNE_ENABLED)
+// ============================================================================
+
+#if ACK_AUTO_TUNE_ENABLED
+// Call when address byte is received (increments attempt counter)
+void psx_ack_tune_on_address(void);
+
+// Call when command byte is received (cmd_success = cmd != 0xFF)
+void psx_ack_tune_on_command(bool cmd_success);
+
+// Reset tuning state
+void psx_ack_tune_reset(void);
+
+// Get current ACK pulse width
+uint32_t psx_ack_get_pulse_width(void);
+
+// Get current ACK post-wait time
+uint32_t psx_ack_get_post_wait(void);
+
+// Check if tuning is complete
+bool psx_ack_is_tuning_complete(void);
+
+// Check if tuning has started
+bool psx_ack_is_tuning_started(void);
+#endif
 
 #endif // PSX_BITBANG_H

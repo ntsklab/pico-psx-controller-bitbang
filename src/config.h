@@ -70,16 +70,44 @@
 // PSX bus timing
 #define PSX_CLOCK_FREQ_HZ       250000      // ~250kHz typical
 #define PSX_BIT_PERIOD_US       4           // ~4μs per bit at 250kHz
-#define PSX_BYTE_TIMEOUT_US     100         // Timeout for byte reception
-#define PSX_CLK_TIMEOUT_US      100         // Timeout for individual clock edge - increased from 50µs
+#define PSX_BYTE_TIMEOUT_US     200         // Timeout for byte reception
+#define PSX_CLK_TIMEOUT_US      200         // Timeout for individual clock edge - increased from 50µs
 
-// ACK timing
-// Note: PSX ignores ACK pulses within first 2-3µs after last SCK pulse
-#define ACK_DELAY_US            5           // Delay before ACK assertion (increased for compatibility)
-#define ACK_PULSE_WIDTH_US      5           // ACK pulse duration - slightly wider for older games
+// ============================================================================
+// ACK Timing Configuration
+// ============================================================================
 
-// Button polling
-#define BUTTON_POLL_INTERVAL_US 1000        // 1000µs = 1kHz polling rate
+// ACK Auto-Tuning
+// Automatically adjusts ACK pulse width and post-wait timing
+// to find optimal parameters for both PS1 and PS2 compatibility
+#define ACK_AUTO_TUNE_ENABLED   1
+
+#if ACK_AUTO_TUNE_ENABLED
+// Auto-tuning parameter ranges - tested for PS1/PS2 compatibility
+#define ACK_PULSE_WIDTH_MIN     1           // Minimum pulse width (1µs for PS2 high-speed)
+#define ACK_PULSE_WIDTH_MAX     6           // Maximum pulse width (6µs for PS1 compatibility)
+#define ACK_PULSE_WIDTH_STEP    1           // Pulse width increment step (1µs)
+
+#define ACK_POST_WAIT_MIN       0           // Minimum wait after ACK (0µs)
+#define ACK_POST_WAIT_MAX       6           // Maximum wait after ACK (6µs)
+#define ACK_POST_WAIT_STEP      1           // Wait time increment step (1µs)
+
+// Auto-tuning behavior
+#define ACK_TUNE_TEST_TRANSACTIONS  8           // Number of transactions to test each setting
+#define ACK_TUNE_TIMEOUT_US         10000000 // Max wait time per setting (10 seconds)
+#define ACK_TUNE_CMD_SUCCESS_THRESHOLD 0.5  // Command success rate threshold (50%)
+#define ACK_TUNE_IDLE_TIMEOUT_US    5000000 // Reset tuning if no transaction for 5 seconds
+#else
+// Fixed ACK timing (when auto-tune is disabled)
+#define ACK_PULSE_WIDTH_US      3           // ACK pulse width (3µs)
+#define ACK_POST_WAIT_US        50          // Wait after ACK (50µs)
+#endif
+
+// ============================================================================
+// Button Polling Configuration
+// ============================================================================
+
+#define BUTTON_POLL_INTERVAL_US 1000        // Button sampling rate: 1000µs = 1kHz
 
 // Button input mode
 // 0: Direct mode - PSX reads current button state (may miss brief inputs)
@@ -116,7 +144,7 @@
 // Debug Configuration
 // ============================================================================
 
-#define DEBUG_ENABLED           0           // Set to 1 for USB serial debugging
+#define DEBUG_ENABLED           0           // Default debug mode (can be toggled at runtime)
 
 // ============================================================================
 // LED Status Modes
