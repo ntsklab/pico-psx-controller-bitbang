@@ -1,13 +1,10 @@
 # PSX Controller Bit-Banging Simulator
 
-Raspberry Pi Pico (RP2040) を使用した、**ビットバンギング（GPIO直接制御）**によるPS1/PS2コントローラシミュレータです。
+Raspberry Pi Pico (RP2040) を使用した、 **ビットバンギング（GPIO直接制御）** によるPS1/PS2コントローラシミュレータです。
 
 ## 特徴
 
-- ✅ **完全なビットバンギング実装** - PIOを使わずGPIO直接制御
 - ✅ **デュアルコア構成** - Core0でボタンポーリング、Core1でPSX通信
-- ✅ **メモリーカード共存対応** - オープンドレイン制御による完全なバス共有
-- ✅ **正確なタイミング制御** - CLKエッジ同期とACKパルス生成
 - ✅ **デジタルコントローラモード** - 14ボタン対応
 
 ## ハードウェア要件
@@ -67,10 +64,6 @@ cmake ..
 # ビルド実行
 make -j4
 ```
-
-生成されるファイル:
-- `pico-psx-controller-bitbang.uf2` - Picoへの書き込み用
-- `pico-psx-controller-bitbang.elf` - デバッグ用
 
 ### Picoへの書き込み
 
@@ -137,67 +130,6 @@ src/
 └── config.h            設定定数とピン定義
 ```
 
-## 技術詳細
-
-### ビットバンギング実装
-
-CLKエッジ検出とデータ送受信を完全にソフトウェアで実装:
-
-```c
-// CLK立ち上がりエッジでCMDビットを読み取り
-for (int bit = 0; bit < 8; bit++) {
-    wait_clk_rising();
-    if (gpio_get(PIN_CMD)) data |= (1 << bit);
-}
-
-// CLK立ち下がりエッジでDATビットを出力
-for (int bit = 0; bit < 8; bit++) {
-    wait_clk_falling();
-    if (data & (1 << bit)) {
-        gpio_set_dir(PIN_DAT, GPIO_IN);   // Hi-Z
-    } else {
-        gpio_set_dir(PIN_DAT, GPIO_OUT);  // LOW
-    }
-}
-```
-
-### オープンドレイン制御
-
-DATとACKラインはオープンドレイン動作:
-
-- **Hi-Z状態**: `gpio_set_dir(pin, GPIO_IN)` - 外部プルアップで HIGH
-- **LOW出力**: `gpio_set_dir(pin, GPIO_OUT)` + `gpio_put(pin, 0)`
-
-この方式により、メモリーカードと安全にバス共有が可能。
-
-### コア間通信
-
-ダブルバッファリングによるロックフリーなデータ交換:
-
-```c
-// Core 0: 書き込み
-uint32_t write_idx = 1 - g_shared_state.read_index;
-g_shared_state.buffer[write_idx] = new_data;
-g_shared_state.write_index = write_idx;
-
-// Core 1: 読み取り
-uint32_t read_idx = g_shared_state.write_index;
-g_shared_state.read_index = read_idx;
-data = g_shared_state.buffer[read_idx];
-```
-
-### SELECT割り込み
-
-SELECT立ち上がりエッジで即座にバス解放:
-
-```c
-void psx_sel_interrupt_handler(void) {
-    gpio_set_dir(PIN_DAT, GPIO_IN);  // Hi-Z
-    gpio_set_dir(PIN_ACK, GPIO_IN);  // Hi-Z
-    transaction_active = false;
-}
-```
-
 ## トラブルシューティング
 
 ### コントローラが認識されない
@@ -205,31 +137,14 @@ void psx_sel_interrupt_handler(void) {
 1. **配線確認**
    - 各ピンの接続を確認
    - GNDが共通接続されているか確認
-   - プルアップ抵抗（1kΩ程度）がDATとACKに接続されているか
 
 2. **信号確認**
-   - オシロスコープでCLK信号を確認（~250kHz）
+   - オシロスコープでCLK信号を確認
    - SELECT信号がLOWになっているか確認
 
 3. **デバッグ出力**
    - `DEBUG_ENABLED` を有効化
    - トランザクション統計を確認
-
-### ボタンが反応しない
-
-1. ボタンGPIOの配線確認
-2. プルアップ抵抗の確認（内部プルアップ有効）
-3. デバッグ出力でボタン値を確認
-
-### メモリーカードが動作しない
-
-1. SELECT非選択時にDATとACKがHi-Zになっているか確認
-2. メモリーカードアドレス（0x81）で応答していないか確認
-3. オシロスコープでバス競合がないか確認
-
-## ライセンス
-
-このプロジェクトはMITライセンスの下で公開されています。
 
 ## 参考資料
 
@@ -237,15 +152,9 @@ void psx_sel_interrupt_handler(void) {
 - [Raspberry Pi Pico Datasheet](https://datasheets.raspberrypi.com/pico/pico-datasheet.pdf)
 - [RP2040 Datasheet](https://datasheets.raspberrypi.com/rp2040/rp2040-datasheet.pdf)
 - [Pico C/C++ SDK Documentation](https://datasheets.raspberrypi.com/pico/raspberry-pi-pico-c-sdk.pdf)
-
-## 貢献
-
-バグレポート、機能要望、プルリクエストを歓迎します。
-
-## 作者
-
-PSX Controller Bit-Banging Implementation Project
+- [PicoGamepadConverter](https://github.com/Loc15/PicoGamepadConverter)
+- [PicoMemcard](https://github.com/dangiu/PicoMemcard/blob/pmc%2B/release/poc_examples/controller_simulator/controller_simulator.c)
 
 ---
 
-**注意**: このプロジェクトは教育・趣味目的です。商用利用する場合は、関連する特許やライセンスを確認してください。
+**注意**: このプロジェクトは教育・趣味目的です。
