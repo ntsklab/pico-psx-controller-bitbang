@@ -27,11 +27,12 @@
 
 shared_controller_state_t g_shared_state;
 
-#if BUTTON_LATCHING_MODE
-// Latching mode: Store accumulated button presses
+// Latching mode: Store accumulated button presses (used when latching_mode is ON)
 static uint8_t latched_btn1 = 0xFF;
 static uint8_t latched_btn2 = 0xFF;
-#endif
+
+// External runtime configuration
+extern bool latching_mode;
 
 // ============================================================================
 // Implementation
@@ -53,22 +54,25 @@ void shared_state_init(void)
 
 void shared_state_write(uint8_t btn1, uint8_t btn2)
 {
-#if BUTTON_LATCHING_MODE
-    // Latching mode: Accumulate button presses (0 = pressed)
-    // Once a button is pressed (bit = 0), keep it pressed until PSX reads it
-    latched_btn1 &= btn1; // Bitwise AND - keeps 0s (pressed buttons)
-    latched_btn2 &= btn2;
+    uint32_t write_idx = 1 - g_shared_state.read_index;
+    
+    if (latching_mode)
+    {
+        // Latching mode: Accumulate button presses (0 = pressed)
+        // Once a button is pressed (bit = 0), keep it pressed until PSX reads it
+        latched_btn1 &= btn1; // Bitwise AND - keeps 0s (pressed buttons)
+        latched_btn2 &= btn2;
 
-    // Write latched state to buffer
-    uint32_t write_idx = 1 - g_shared_state.read_index;
-    g_shared_state.buffer[write_idx].buttons1 = latched_btn1;
-    g_shared_state.buffer[write_idx].buttons2 = latched_btn2;
-#else
-    // Direct mode: Write current button state directly
-    uint32_t write_idx = 1 - g_shared_state.read_index;
-    g_shared_state.buffer[write_idx].buttons1 = btn1;
-    g_shared_state.buffer[write_idx].buttons2 = btn2;
-#endif
+        // Write latched state to buffer
+        g_shared_state.buffer[write_idx].buttons1 = latched_btn1;
+        g_shared_state.buffer[write_idx].buttons2 = latched_btn2;
+    }
+    else
+    {
+        // Direct mode: Write current button state directly
+        g_shared_state.buffer[write_idx].buttons1 = btn1;
+        g_shared_state.buffer[write_idx].buttons2 = btn2;
+    }
 
     // Memory barrier to ensure writes complete before index update
     __dmb();
@@ -92,11 +96,12 @@ void shared_state_read(uint8_t *btn1, uint8_t *btn2)
     *btn1 = g_shared_state.buffer[read_idx].buttons1;
     *btn2 = g_shared_state.buffer[read_idx].buttons2;
 
-#if BUTTON_LATCHING_MODE
-    // Clear latched state after PSX reads it
-    latched_btn1 = 0xFF;
-    latched_btn2 = 0xFF;
-#endif
+    if (latching_mode)
+    {
+        // Clear latched state after PSX reads it
+        latched_btn1 = 0xFF;
+        latched_btn2 = 0xFF;
+    }
 
     // ========================================================================
     // SOCD (Simultaneous Opposite Cardinal Direction) Cleaner - HitBox style

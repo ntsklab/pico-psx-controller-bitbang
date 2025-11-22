@@ -41,6 +41,7 @@ add_executable(pico-psx-controller-bitbang
     src/psx_bitbang.c
     src/button_input.c
     src/shared_state.c
+    src/flash_config.c
 )
 
 # Include directories
@@ -61,6 +62,8 @@ target_link_libraries(pico-psx-controller-bitbang
         pico_multicore
         hardware_gpio
         hardware_timer
+        hardware_flash
+        hardware_sync
 )
 
 # Add the standard include files to the build

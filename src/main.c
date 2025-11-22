@@ -27,6 +27,7 @@
 #include "shared_state.h"
 #include "button_input.h"
 #include "psx_protocol.h"
+#include "flash_config.h"
 
 // ============================================================================
 // LED Status Management
@@ -35,10 +36,33 @@
 static led_status_t current_led_status = LED_IDLE;
 
 // ============================================================================
-// Debug Mode Control
+// Runtime Configuration Control
 // ============================================================================
 
-bool debug_mode = DEBUG_ENABLED; // Runtime debug mode flag
+bool debug_mode = DEBUG_ENABLED;                   // Runtime debug mode flag
+bool latching_mode = BUTTON_LATCHING_MODE;         // Runtime latching mode flag
+
+// ============================================================================
+// Help Message
+// ============================================================================
+
+void print_startup_message(void)
+{
+    printf("\n");
+    printf("==========================================\n");
+    printf("  PSX Controller Bit-Banging Simulator\n");
+    printf("==========================================\n");
+    printf("System ready.\n");
+    printf("Commands:\n");
+    printf("  debug      - Toggle debug mode\n");
+    printf("  latch      - Toggle latching mode\n");
+    printf("  save       - Save settings to flash\n");
+    printf("  help / ?   - Show this message\n");
+    printf("\nCurrent settings:\n");
+    printf("  Debug mode:    %s\n", debug_mode ? "ON" : "OFF");
+    printf("  Latching mode: %s\n", latching_mode ? "ON" : "OFF");
+    printf("\n");
+}
 
 void led_init(void)
 {
@@ -161,6 +185,18 @@ int main(void)
     // Small delay to allow USB to initialize
     sleep_ms(100);
 
+    // Initialize flash configuration
+    flash_config_init();
+    
+    // Load saved configuration (if available)
+    if (flash_config_load(&debug_mode, &latching_mode)) {
+        // Configuration loaded from flash
+    } else {
+        // No saved config, use defaults from config.h
+        debug_mode = DEBUG_ENABLED;
+        latching_mode = BUTTON_LATCHING_MODE;
+    }
+
     // Initialize LED
     led_init();
     led_set_status(LED_READY);
@@ -192,14 +228,8 @@ int main(void)
     uint8_t btn1 = 0xFF;
     uint8_t btn2 = 0xFF;
 
-    printf("\n");
-    printf("==========================================\n");
-    printf("  PSX Controller Bit-Banging Simulator\n");
-    printf("==========================================\n");
-    printf("System ready.\n");
-    printf("Type 'debug' to toggle debug mode\n");
-    printf("Debug mode: %s\n", debug_mode ? "ON" : "OFF");
-    printf("\n");
+    // Print startup message
+    print_startup_message();
 
     while (1)
     {
@@ -222,6 +252,23 @@ int main(void)
                     {
                         debug_mode = !debug_mode;
                         printf("\n>>> Debug mode: %s\n\n", debug_mode ? "ON" : "OFF");
+                    }
+                    // Check for "latch" command
+                    else if (strcmp(cmd_buffer, "latch") == 0)
+                    {
+                        latching_mode = !latching_mode;
+                        printf("\n>>> Latching mode: %s\n\n", latching_mode ? "ON" : "OFF");
+                    }
+                    // Check for "help" or "?" command
+                    else if (strcmp(cmd_buffer, "help") == 0 || strcmp(cmd_buffer, "?") == 0)
+                    {
+                        print_startup_message();
+                    }
+                    // Check for "save" command
+                    else if (strcmp(cmd_buffer, "save") == 0)
+                    {
+                        flash_config_save(debug_mode, latching_mode);
+                        printf("\n>>> Settings saved to flash\n\n");
                     }
 
                     cmd_pos = 0;
