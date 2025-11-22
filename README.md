@@ -154,6 +154,7 @@ src/
 - [Pico C/C++ SDK Documentation](https://datasheets.raspberrypi.com/pico/raspberry-pi-pico-c-sdk.pdf)
 - [PicoGamepadConverter](https://github.com/Loc15/PicoGamepadConverter)
 - [PicoMemcard](https://github.com/dangiu/PicoMemcard/blob/pmc%2B/release/poc_examples/controller_simulator/controller_simulator.c)
+- [GameSX PSX Controller Data](https://gamesx.com/controldata/psxcont/psxcont.htm)
 
 ---
 
