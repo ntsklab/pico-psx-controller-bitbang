@@ -116,7 +116,7 @@
 // Debug Configuration
 // ============================================================================
 
-#define DEBUG_ENABLED           1           // Set to 1 for USB serial debugging
+#define DEBUG_ENABLED           0           // Set to 1 for USB serial debugging
 
 // ============================================================================
 // LED Status Modes
