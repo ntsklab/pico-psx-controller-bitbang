@@ -112,7 +112,7 @@
 // Button input mode
 // 0: Direct mode - PSX reads current button state (may miss brief inputs)
 // 1: Latching mode - Button presses are held until PSX reads them (guarantees detection)
-#define BUTTON_LATCHING_MODE 0
+#define BUTTON_LATCHING_MODE 1
 
 // ============================================================================
 // PSX Protocol Constants

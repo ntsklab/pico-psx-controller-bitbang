@@ -101,61 +101,75 @@ void led_update(void)
     }
     else
     {
-        // Non-debug mode: Blink pattern (100ms ON, 300ms cycle)
-        // LED_READY = 1 blink, LED_POLLING = 2 blinks, LED_ERROR = 3 blinks
-
-        uint8_t target_blinks = 0;
-        switch (current_led_status)
+        // Non-debug mode: Blink pattern
+        // ERROR = fast blink (200ms cycle)
+        // Others = slow pattern blinks
+        
+        if (current_led_status == LED_ERROR)
         {
-        case LED_READY:
-        case LED_IDLE:
-            target_blinks = 1;
-            break;
-        case LED_POLLING:
-        case LED_ACTIVE:
-            target_blinks = 2;
-            break;
-        case LED_ERROR:
-            target_blinks = 3;
-            break;
-        case LED_MEMCARD_DETECT:
-            target_blinks = 1;
-            break;
-        }
-
-        uint32_t time_in_pattern = now - pattern_start;
-
-        // Pattern duration: target_blinks * 300ms + 700ms pause = total cycle
-        uint32_t pattern_duration = (target_blinks * 300000) + 700000;
-
-        if (time_in_pattern >= pattern_duration)
-        {
-            // Restart pattern
-            pattern_start = now;
-            time_in_pattern = 0;
-            blink_count = 0;
-        }
-
-        // Calculate current blink phase
-        uint32_t blink_phase = time_in_pattern % 300000; // 300ms per blink
-        uint32_t current_blink = time_in_pattern / 300000;
-
-        if (current_blink < target_blinks)
-        {
-            // Active blink period
-            if (blink_phase < 100000)
-            {
-                gpio_put(LED_PIN, 1); // ON for 100ms
-            }
-            else
-            {
-                gpio_put(LED_PIN, 0); // OFF for 200ms
-            }
+            // Fast blink for error: 100ms ON, 100ms OFF
+            uint32_t fast_phase = now % 200000; // 200ms cycle
+            gpio_put(LED_PIN, fast_phase < 100000 ? 1 : 0);
         }
         else
         {
-            // Pause period
-            gpio_put(LED_PIN, 0);
+            // Pattern blinks based on latching mode
+            // Latching OFF: READY = 1 blink, POLLING = 2 blinks
+            // Latching ON:  READY = 1 blink, POLLING = 3 blinks
+            
+            uint8_t target_blinks = 0;
+            switch (current_led_status)
+            {
+            case LED_READY:
+            case LED_IDLE:
+                target_blinks = 1;
+                break;
+            case LED_POLLING:
+            case LED_ACTIVE:
+                target_blinks = latching_mode ? 3 : 2; // 3 blinks if latching ON
+                break;
+            case LED_MEMCARD_DETECT:
+                target_blinks = 1;
+                break;
+            default:
+                target_blinks = 1;
+                break;
+            }
+
+            uint32_t time_in_pattern = now - pattern_start;
+
+            // Pattern duration: target_blinks * 300ms + 700ms pause = total cycle
+            uint32_t pattern_duration = (target_blinks * 300000) + 700000;
+
+            if (time_in_pattern >= pattern_duration)
+            {
+                // Restart pattern
+                pattern_start = now;
+                time_in_pattern = 0;
+                blink_count = 0;
+            }
+
+            // Calculate current blink phase
+            uint32_t blink_phase = time_in_pattern % 300000; // 300ms per blink
+            uint32_t current_blink = time_in_pattern / 300000;
+
+            if (current_blink < target_blinks)
+            {
+                // Active blink period
+                if (blink_phase < 100000)
+                {
+                    gpio_put(LED_PIN, 1); // ON for 100ms
+                }
+                else
+                {
+                    gpio_put(LED_PIN, 0); // OFF for 200ms
+                }
+            }
+            else
+            {
+                // Pause period
+                gpio_put(LED_PIN, 0);
+            }
         }
     }
 }
