@@ -33,15 +33,15 @@ void psx_bitbang_init(void);
 // Open-drain control functions for DAT and ACK lines
 // Hi-Z state: set pin to input mode (pulled HIGH by external resistor)
 // LOW state: set pin to output mode with LOW value
-void psx_dat_hiz(void);     // Release DAT line (Hi-Z)
-void psx_dat_low(void);     // Assert DAT line LOW
-void psx_ack_hiz(void);     // Release ACK line (Hi-Z)
-void psx_ack_low(void);     // Assert ACK line LOW
+void psx_dat_hiz(void); // Release DAT line (Hi-Z)
+void psx_dat_low(void); // Assert DAT line LOW
+void psx_ack_hiz(void); // Release ACK line (Hi-Z)
+void psx_ack_low(void); // Assert ACK line LOW
 
 // Read current state of bus lines
-bool psx_read_sel(void);    // Read SELECT line (true = HIGH/inactive)
-bool psx_read_clk(void);    // Read CLOCK line
-bool psx_read_cmd(void);    // Read COMMAND line
+bool psx_read_sel(void); // Read SELECT line (true = HIGH/inactive)
+bool psx_read_clk(void); // Read CLOCK line
+bool psx_read_cmd(void); // Read COMMAND line
 
 // Wait for clock edges with timeout
 // Returns true if edge detected, false if timeout

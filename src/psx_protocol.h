@@ -44,17 +44,18 @@ bool psx_process_transaction(uint8_t btn1, uint8_t btn2);
 void psx_sel_interrupt_handler(unsigned int gpio_num, uint32_t events);
 
 // Get transaction statistics for debugging
-typedef struct {
-    uint64_t total_transactions;       // 64-bit for long-term operation (5+ billion years)
+typedef struct
+{
+    uint64_t total_transactions; // 64-bit for long-term operation (5+ billion years)
     uint64_t controller_transactions;
     uint64_t memcard_transactions;
     uint64_t invalid_transactions;
     uint64_t timeout_errors;
-    uint8_t last_invalid_addr;  // Last invalid address received
-    uint8_t last_invalid_cmd;   // Last invalid command received
-    uint32_t min_interval_us;   // Minimum transaction interval (microseconds)
-    uint32_t max_interval_us;   // Maximum transaction interval (microseconds)
-    uint32_t avg_interval_us;   // Average transaction interval (microseconds)
+    uint8_t last_invalid_addr; // Last invalid address received
+    uint8_t last_invalid_cmd;  // Last invalid command received
+    uint32_t min_interval_us;  // Minimum transaction interval (microseconds)
+    uint32_t max_interval_us;  // Maximum transaction interval (microseconds)
+    uint32_t avg_interval_us;  // Average transaction interval (microseconds)
 } psx_stats_t;
 
 void psx_get_stats(psx_stats_t *stats);

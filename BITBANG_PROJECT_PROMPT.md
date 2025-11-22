@@ -32,12 +32,14 @@ Raspberry Pi Pico (RP2040) で、PIOを使わない**純粋なビットバンギ
 
 ### 達成すべき機能要件
 1. PS1/PS2実機でコントローラーとして認識される
-2. メモリーカードと同一ポートで共存できる
-3. 新旧ゲームの両方で動作する
-4. 14ボタンの入力を1kHzで高精度サンプリング
-5. 1フレーム未満の短い入力も検出できる（オプション）
-6. HitBox型格闘スティックのSOCD処理に対応
-7. ポーリングレート等の統計情報を取得できる
+2. ACK Auto-TuningによりPS1/PS2両対応（自動タイミング調整）
+3. メモリーカードと同一ポートで共存できる
+4. 新旧ゲームの両方で動作する
+5. 14ボタンの入力を1kHzで高精度サンプリング
+6. 1フレーム未満の短い入力も検出できる（オプション）
+7. HitBox型格闘スティックのSOCD処理に対応
+8. ポーリングレート等の統計情報を取得できる
+9. シリアルコマンドでデバッグモード動的切り替え
 
 ### 成功基準（統計値で確認）
 ```
@@ -109,12 +111,13 @@ GPIO 27 = SELECT
 
 | パラメータ | 値 | 備考 |
 |-----------|-----|------|
-| クロック周波数 | ~250kHz | 標準値、実測では可変 |
+| クロック周波数 | PS1: ~250kHz, PS2: 250kHz-5MHz？？ | 可変 |
 | クロック極性 | CPOL=1 | アイドル時HIGH |
 | クロックフェーズ | CPHA=1 | 立ち下がりエッジで出力、立ち上がりで読み取り |
 | ビット順序 | LSB first | |
-| ACK遅延 | 5µs | 最終CLK後から (**旧ゲーム対応**) |
-| ACKパルス幅 | 5µs | (**旧ゲーム対応**) |
+| ACK固定遅延 | 5µs | 最終CLK後から（psx_send_ack内の固定値） |
+| ACKパルス幅 | 1-6µs | **Auto-Tuningで自動調整** |
+| ACKポストウェイト | 0-6µs | **Auto-Tuningで自動調整** |
 | CLKタイムアウト | 100µs | |
 
 ### デバイスアドレッシング
@@ -487,6 +490,183 @@ if (up_pressed && down_pressed) {
 }
 ```
 
+### 問題9: PS1/PS2でACKタイミング要件が異なる → Auto-Tuning実装
+
+**現象**: 
+- PS2は高速クロック(250kHz-5MHz？)で動作し、短いACKパルス(1-2µs)が必要
+- PS1は低速クロック(250kHz)で動作し、長めのACKパルス(3-6µs)が必要
+- 固定タイミングではどちらかで動作しない・・・と思ったけど3usで両方動く可能性あり。（じゃあいらないじゃん、自動調整・・・）
+
+**解決策**: 起動時にACKタイミングを自動調整するAuto-Tuning機能
+
+```c
+// config.h - Auto-Tuning設定
+#define ACK_AUTO_TUNE_ENABLED   1
+
+#if ACK_AUTO_TUNE_ENABLED
+// パラメータ探索範囲
+#define ACK_PULSE_WIDTH_MIN     1           // 最小パルス幅 (1µs for PS2)
+#define ACK_PULSE_WIDTH_MAX     6           // 最大パルス幅 (6µs for PS1)
+#define ACK_POST_WAIT_MIN       0           // 最小ウェイト (0µs)
+#define ACK_POST_WAIT_MAX       6           // 最大ウェイト (6µs)
+
+// 評価基準
+#define ACK_TUNE_TEST_TRANSACTIONS  8       // 各設定で8トランザクション試験
+#define ACK_TUNE_CMD_SUCCESS_THRESHOLD 0.5  // 成功率50%以上
+#define ACK_TUNE_IDLE_TIMEOUT_US    5000000 // 5秒間トランザクションなしでリセット
+#endif
+
+// psx_bitbang.c - Auto-Tuning状態管理
+static volatile uint32_t current_ack_pulse_width = ACK_PULSE_WIDTH_MAX;
+static volatile uint32_t current_ack_post_wait = ACK_POST_WAIT_MIN;
+static volatile uint32_t test_cmd_success = 0;     // 成功カウント
+static volatile uint32_t best_pulse_width = ACK_PULSE_WIDTH_MAX;
+static volatile uint32_t best_post_wait = ACK_POST_WAIT_MIN;
+static volatile float best_cmd_success_rate = -1.0f;
+static volatile bool tuning_complete = false;
+
+// Auto-Tuning評価関数
+void psx_ack_tune_on_command(bool cmd_success) {
+    if (tuning_complete) return;
+    
+    if (cmd_success) test_cmd_success++;
+    
+    // 8トランザクション経過したら評価
+    if (test_addr_count >= ACK_TUNE_TEST_TRANSACTIONS) {
+        float success_rate = (float)test_cmd_success / (float)test_addr_count;
+        
+        // 成功率が閾値以上なら候補として記録
+        if (success_rate >= ACK_TUNE_CMD_SUCCESS_THRESHOLD) {
+            bool is_better = false;
+            
+            // より高い成功率
+            if (success_rate > best_cmd_success_rate) {
+                is_better = true;
+            }
+            // 同じ成功率なら、短いWAIT優先、次に中間のPULSE優先
+            else if (success_rate == best_cmd_success_rate) {
+                if (current_ack_post_wait < best_post_wait) {
+                    is_better = true;
+                } else if (current_ack_post_wait == best_post_wait) {
+                    uint32_t pulse_mid = (ACK_PULSE_WIDTH_MIN + ACK_PULSE_WIDTH_MAX) / 2;
+                    int32_t current_dist = abs((int32_t)current_ack_pulse_width - (int32_t)pulse_mid);
+                    int32_t best_dist = abs((int32_t)best_pulse_width - (int32_t)pulse_mid);
+                    if (current_dist < best_dist) {
+                        is_better = true;
+                    }
+                }
+            }
+            
+            if (is_better) {
+                best_pulse_width = current_ack_pulse_width;
+                best_post_wait = current_ack_post_wait;
+                best_cmd_success_rate = success_rate;
+                printf("[ACK-TUNE] New best: PULSE=%lu, WAIT=%lu (%.1f%%)\n",
+                       current_ack_pulse_width, current_ack_post_wait,
+                       success_rate * 100.0f);
+            }
+        }
+        
+        // 次のパラメータ組み合わせに移行
+        // 探索順序: PULSE=大→小、各PULSEでWAIT=小→大
+        if (current_ack_post_wait < ACK_POST_WAIT_MAX) {
+            current_ack_post_wait++;
+        } else {
+            current_ack_post_wait = ACK_POST_WAIT_MIN;
+            if (current_ack_pulse_width > ACK_PULSE_WIDTH_MIN) {
+                current_ack_pulse_width--;
+            } else {
+                // 全組み合わせ探索完了
+                if (best_cmd_success_rate >= ACK_TUNE_CMD_SUCCESS_THRESHOLD) {
+                    current_ack_pulse_width = best_pulse_width;
+                    current_ack_post_wait = best_post_wait;
+                    tuning_complete = true;
+                    printf("[ACK-TUNE] LOCKED: PULSE=%lu us, WAIT=%lu us (%.0f%%)\n",
+                           best_pulse_width, best_post_wait, best_cmd_success_rate * 100.0f);
+                }
+            }
+        }
+        
+        // カウンタリセット
+        test_addr_count = 0;
+        test_cmd_success = 0;
+    }
+}
+
+// ACK送信（現在のパラメータ使用）
+void psx_send_ack(void) {
+    busy_wait_us_32(5);  // 固定ウェイト（psx_send_ackの最初）
+    busy_wait_us_32(current_ack_post_wait);  // 可変ウェイト
+    gpio_out_low(PIN_ACK);
+    busy_wait_us_32(current_ack_pulse_width);  // 可変パルス幅
+    gpio_hi_z(PIN_ACK);
+}
+```
+
+**効果**:
+- PS1/PS2両対応、起動時に自動的に最適なタイミングを検出
+- 成功率、ウェイト時間、パルス幅の優先順位で最適パラメータを選択
+- LOCKED後はタイミング固定で安定動作
+
+---
+
+## デバッグモード動的切り替え
+
+起動後にシリアルコマンドでデバッグモードをON/OFFできる機能。
+
+```c
+// main.c - グローバル変数
+bool debug_mode = DEBUG_ENABLED;  // config.hのデフォルト値で初期化
+
+// メインループでシリアル入力チェック
+while (1) {
+    int ch = getchar_timeout_us(0);  // ノンブロッキング読み取り
+    if (ch != PICO_ERROR_TIMEOUT) {
+        static char cmd_buffer[32];
+        static uint8_t cmd_pos = 0;
+        
+        if (ch == '\r' || ch == '\n') {
+            if (cmd_pos > 0) {
+                cmd_buffer[cmd_pos] = '\0';
+                
+                if (strcmp(cmd_buffer, "debug") == 0) {
+                    debug_mode = !debug_mode;
+                    printf("\n>>> Debug mode: %s\n\n", debug_mode ? "ON" : "OFF");
+                }
+                
+                cmd_pos = 0;
+            }
+        } else if (ch >= 32 && ch < 127 && cmd_pos < sizeof(cmd_buffer) - 1) {
+            cmd_buffer[cmd_pos++] = ch;
+        }
+    }
+    
+    // ボタンサンプリング処理
+    // ...
+    
+    // デバッグ出力（debug_modeで条件分岐）
+    if (debug_mode) {
+        // 統計情報表示
+    }
+}
+
+// LED更新もdebug_modeで動作変更
+void led_update(void) {
+    if (debug_mode) {
+        // シンプル動作: ポーリング中のみ点灯
+        gpio_put(LED_PIN, current_led_status == LED_POLLING ? 1 : 0);
+    } else {
+        // 点滅パターン動作
+        // ...
+    }
+}
+```
+
+**使い方**:
+```
+debug [Enter]
+```
+
 ---
 
 ## LED制御
@@ -720,7 +900,7 @@ AIにこのプロジェクトを実装させる際、以下を必ず指示・確
 ### プロトコル実装フェーズ
 - [ ] メモリーカードアドレス(0x81)を最優先チェック
 - [ ] メモリーカードトランザクション中はSEL HIGH待機
-- [ ] ACKタイミングを5µs/5µsに設定
+- [ ] ACK Auto-Tuning実装（PULSE: 1-6µs, WAIT: 0-6µs探索）
 - [ ] タイミングクリティカル関数から全printf()削除
 
 ### ボタン処理フェーズ
@@ -732,7 +912,8 @@ AIにこのプロジェクトを実装させる際、以下を必ず指示・確
 - [ ] トランザクション統計（total/controller/memcard/invalid/timeout）
 - [ ] ポーリング間隔統計（min/max/avg、0x42コマンド実行時のみ計測）
 - [ ] ボタンサンプリング統計（実測値）
-- [ ] DEBUG_ENABLEDで出力on/off切替
+- [ ] ACK Auto-Tuning状態表示（waiting.../tuning.../LOCKED）
+- [ ] シリアルコマンドでデバッグモード動的切り替え（"debug"入力）
 
 ### 動作確認
 - [ ] Invalid: 0, Timeout: 0 を達成
