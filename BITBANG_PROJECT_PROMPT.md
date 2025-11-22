@@ -650,53 +650,93 @@ while (1) {
     }
 }
 
-// LED更新もdebug_modeで動作変更
+// LED更新もdebug_modeとlatching_modeで動作変更
 void led_update(void) {
     if (debug_mode) {
         // シンプル動作: ポーリング中のみ点灯
         gpio_put(LED_PIN, current_led_status == LED_POLLING ? 1 : 0);
     } else {
-        // 点滅パターン動作
-        // ...
+        // 点滅パターン動作（ラッチングモードで点滅回数変化）
+        // ERROR時は高速点滅
     }
 }
 ```
 
-**使い方**:
+**利用可能なコマンド**:
 ```
-debug [Enter]
+debug [Enter]   # デバッグモード切り替え
+latch [Enter]   # ラッチングモード切り替え
+save [Enter]    # 設定をFlashに保存
+help [Enter]    # ヘルプ表示
+? [Enter]       # ヘルプ表示
 ```
+
+**Flash保存機能**:
+- `save`コマンドで現在の設定（debug_mode, latching_mode）をFlashに保存
+- 次回起動時に自動的に読み込まれる
+- Flashの最終セクター（4KB）を使用
+- 保存時はCore1を一時停止し、完了後に自動再開
 
 ---
 
 ## LED制御
 
-### デバッグモード有効時 (DEBUG_ENABLED=1)
+### デバッグモード有効時 (debug_mode = true)
 
 ```c
 // main.c
 void led_update(void) {
-    switch (current_led_status) {
-        case LED_POLLING:
-            gpio_put(LED_PIN, 1);  // ON
-            break;
-        default:
-            gpio_put(LED_PIN, 0);  // OFF
-            break;
+    if (debug_mode) {
+        switch (current_led_status) {
+            case LED_POLLING:
+                gpio_put(LED_PIN, 1);  // ON during polling
+                break;
+            default:
+                gpio_put(LED_PIN, 0);  // OFF otherwise
+                break;
+        }
     }
 }
 
 // トランザクション検出時にLED_POLLINGに設定、1ms後にLED_READYに戻す
 ```
 
-### デバッグモード無効時 (DEBUG_ENABLED=0)
+### デバッグモード無効時 (debug_mode = false)
 
 ```c
-// ブリンクパターン
-// 1回点滅 = READY
-// 2回点滅 = POLLING
-// 3回点滅 = ERROR
+// ブリンクパターン（ラッチングモードで変化）
+// 1回点滅 = READY (待機中)
+// 2回点滅 = POLLING (ラッチングOFF時)
+// 3回点滅 = POLLING (ラッチングON時)
+// 高速点滅 = ERROR (100ms ON / 100ms OFF)
+
+void led_update(void) {
+    if (current_led_status == LED_ERROR) {
+        // Fast blink: 100ms ON, 100ms OFF (200ms cycle)
+        uint32_t fast_phase = now % 200000;
+        gpio_put(LED_PIN, fast_phase < 100000 ? 1 : 0);
+    } else {
+        // Pattern blinks
+        uint8_t target_blinks = (current_led_status == LED_POLLING) 
+                               ? (latching_mode ? 3 : 2)  // 3 or 2 blinks
+                               : 1;                       // 1 blink for READY
+        
+        // 100ms ON + 200ms OFF per blink, then 700ms pause
+        // Total cycle: target_blinks * 300ms + 700ms
+    }
+}
 ```
+
+### LED表示まとめ
+
+| デバッグモード | 状態 | LED動作 | 意味 |
+|--------------|------|---------|------|
+| ON | POLLING | 点灯 | トランザクション処理中 |
+| ON | その他 | 消灯 | アイドル |
+| OFF | READY | 1回点滅 | 準備完了 |
+| OFF | POLLING (ラッチOFF) | 2回点滅 | ポーリング中（通常） |
+| OFF | POLLING (ラッチON) | 3回点滅 | ポーリング中（格闘ゲーム） |
+| OFF | ERROR | 高速点滅 | エラー発生 |
 
 ---
 
