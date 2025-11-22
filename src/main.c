@@ -236,23 +236,52 @@ int main(void) {
         // Update LED and statistics
         static uint64_t last_trans_count = 0;
         static uint32_t last_activity_time = 0;
+        static bool activity_initialized = false;
         uint32_t now = time_us_32();
         
         psx_stats_t stats;
         psx_get_stats(&stats);
         
-        if (stats.total_transactions > last_trans_count) {
-            // Activity detected - briefly turn on LED
-            led_set_status(LED_POLLING);
-            last_trans_count = stats.total_transactions;
+        // Initialize activity time on first run
+        if (!activity_initialized) {
             last_activity_time = now;
-        } else if ((now - last_activity_time) > 1000) {
-            // No activity for 1ms - turn off LED (show ready state)
-            if (stats.invalid_transactions > 0 || stats.timeout_errors > 0) {
-                led_set_status(LED_ERROR);
-            } else {
-                led_set_status(LED_READY);
+            activity_initialized = true;
+            // Set initial state to READY (no transactions yet)
+            led_set_status(LED_READY);
+        }
+        
+        // Check for controller transactions only (not memory card)
+        if (stats.controller_transactions > last_trans_count) {
+            // Controller activity detected - POLL is happening
+            last_trans_count = stats.controller_transactions;
+            last_activity_time = now;
+            
+            // Set LED to POLLING state
+            led_set_status(LED_POLLING);
+        } else {
+#if DEBUG_ENABLED
+            // Debug mode: Turn off LED quickly (1ms after last transaction)
+            if ((now - last_activity_time) > 1000) {
+                if (stats.invalid_transactions > 0 || stats.timeout_errors > 0) {
+                    led_set_status(LED_ERROR);
+                } else {
+                    led_set_status(LED_READY);
+                }
             }
+#else
+            // Non-debug mode: Change state after 1 second of inactivity
+            if ((now - last_activity_time) > 1000000) {
+                if (stats.invalid_transactions > 0 || stats.timeout_errors > 0) {
+                    if (current_led_status != LED_ERROR) {
+                        led_set_status(LED_ERROR);
+                    }
+                } else {
+                    if (current_led_status != LED_READY) {
+                        led_set_status(LED_READY);
+                    }
+                }
+            }
+#endif
         }
         
         led_update();
