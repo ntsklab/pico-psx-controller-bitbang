@@ -25,11 +25,13 @@ Raspberry Pi Pico (RP2040) を使用した、ビットバンギングによるPS
 
 | 信号 | GPIO | 方向 | 説明 |
 |------|------|------|------|
-| DAT  | 3    | I/O  | データライン (オープンドレイン) |
-| CMD  | 4    | IN   | コマンドライン |
+| DAT  | 3    | OUT  | データ |
+| CMD  | 4    | IN   | コマンド |
 | SEL  | 10   | IN   | セレクト (アクティブLOW) |
 | CLK  | 6    | IN   | クロック (~250kHz) |
 | ACK  | 7    | OUT  | アクノリッジ (オープンドレイン) |
+
+[Pinouts - Controller Ports and Memory-Card Ports](https://psx-spx.consoledev.net/pinouts/#pinouts-controller-ports-and-memory-card-ports) などを参照
 
 ### ボタン入力GPIO
 
