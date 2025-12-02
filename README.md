@@ -29,9 +29,13 @@ Raspberry Pi Pico (RP2040) を使用した、ビットバンギングによるPS
 | CMD  | 4    | IN   | コマンド |
 | SEL  | 10   | IN   | セレクト (アクティブLOW) |
 | CLK  | 6    | IN   | クロック (~250kHz) |
-| ACK  | 7    | OUT  | アクノリッジ (オープンドレイン) |
+| ACK  | 7    | OUT  | アクノリッジ（オープンドレイン） |
 
-[Pinouts - Controller Ports and Memory-Card Ports](https://psx-spx.consoledev.net/pinouts/#pinouts-controller-ports-and-memory-card-ports) などを参照
+[Pinouts - Controller Ports and Memory-Card Ports](https://psx-spx.consoledev.net/pinouts/#pinouts-controller-ports-and-memory-card-ports) などを参照。
+
+注意:
+- PSX本体にプルアップがあるため、Pico側の内部プルアップは全て無効化。
+- DAT/ACKは常にコントローラ側からのみ駆動し、アイドル時はHi-Zに戻す。
 
 ### ボタン入力GPIO
 
@@ -116,10 +120,10 @@ Auto-Tuning有効時、起動時に自動的に最適なACKタイミングを検
 #define BUTTON_POLL_INTERVAL_US 1000
 ```
 
-#### デフォルトデバッグモード
+#### デバッグモード
 ```c
 // 1: 起動時デバッグON
-// 0: 起動時デバッグOFF（デフォルト）
+// 0: 起動時デバッグOFF（デフォルト、実行時切り替え可能）
 #define DEBUG_ENABLED 0
 ```
 

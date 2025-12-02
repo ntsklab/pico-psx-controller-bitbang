@@ -39,7 +39,8 @@ Raspberry Pi Pico (RP2040) で、PIOを使わない**純粋なビットバンギ
 6. 1フレーム未満の短い入力も検出できる（オプション）
 7. HitBox型格闘スティックのSOCD処理に対応
 8. ポーリングレート等の統計情報を取得できる
-9. シリアルコマンドでデバッグモード動的切り替え
+9. シリアルコマンドでデバッグ/ラッチングの動的切り替え
+10. 設定（debug/latching）をFlashに保存・起動時に自動読込
 
 ### 成功基準（統計値で確認）
 ```
@@ -63,21 +64,22 @@ BTN Sample Rate: 1000 Hz ± 1%
 ### PSX/PS2 バス信号ピン配置（固定）
 
 ```c
-PIN_DAT = GPIO 3   // Data line (Open-drain, bidirectional)
-PIN_CMD = GPIO 4   // Command line (Input from PSX)
-PIN_SEL = GPIO 10  // Select/Chip Select (Input from PSX, Active LOW)
-PIN_CLK = GPIO 6   // Clock (Input from PSX, ~250kHz)
-PIN_ACK = GPIO 7   // Acknowledge (Open-drain output to PSX)
+PIN_DAT = GPIO 3   // Data line (Open-drain OUTPUT to PSX, Hi-Z=1 / LOW=0)
+PIN_CMD = GPIO 4   // Command line (INPUT from PSX)
+PIN_SEL = GPIO 10  // Select/Chip Select (INPUT from PSX, Active LOW)
+PIN_CLK = GPIO 6   // Clock (INPUT from PSX, ~250kHz)
+PIN_ACK = GPIO 7   // Acknowledge (Open-drain OUTPUT to PSX)
 ```
 
 **重要**: PSX/PS2本体側に全信号線のプルアップ抵抗あり。Pico側の内部プルアップは使用しない（オープンドレイン動作のため）。
+DAT/ACKはコントローラ側（Pico）からのみ駆動し、アイドル時は必ずHi-Zに戻す。DATは入力として読み取らない。
 
 ### ボタン入力GPIO配置（固定）
 
 ```c
 // Face buttons
 GPIO 22 = Circle (○)
-GPIO 21 = Cross (×)
+GPIO 21 = Cross (☓)
 GPIO 20 = Triangle (△)
 GPIO 19 = Square (□)
 
@@ -279,28 +281,23 @@ if (addr == 0x01) {
 
 **現象**: 新しいゲームでは動作するが、古いPS1ゲームで認識されない。
 
-**原因**: 仕様書では「ACK遅延2µs、パルス幅2µs」だが、古いゲームはより長いACKを期待。
+**原因**: 仕様（ACK遅延/幅=2µs）通りでは機種・タイトル差に追従できない。
 
-**解決策**: ACKタイミングを延長
+**解決策**: ACKのプリディレイのみ固定し（5µs）、パルス幅とポストウェイトはAuto-Tuningで決定
 ```c
-// config.h
-#define ACK_DELAY_US        5    // 最終CLKパルス後の遅延（2µs→5µsに増加）
-#define ACK_PULSE_WIDTH_US  5    // ACKパルス幅（2µs→5µsに増加）
-
-// psx_bitbang.c
+// psx_bitbang.c（概念図）
 void psx_send_ack(void) {
-    busy_wait_us_32(ACK_DELAY_US);        // バイト受信後、待機
-    gpio_set_dir(PIN_ACK, GPIO_OUT);      // ACK=LOW
-    busy_wait_us_32(ACK_PULSE_WIDTH_US);  // パルス幅
-    gpio_set_dir(PIN_ACK, GPIO_IN);       // ACK=Hi-Z
+    busy_wait_us_32(5);                    // 固定プリディレイ（最終CLK後）
+    busy_wait_us_32(tuned_post_wait_us);   // 可変（Auto-Tune）
+    gpio_set_dir(PIN_ACK, GPIO_OUT);       // ACK=LOW（オープンドレイン）
+    busy_wait_us_32(tuned_pulse_width_us); // 可変（Auto-Tune）
+    gpio_set_dir(PIN_ACK, GPIO_IN);        // ACK=Hi-Zに解放
 }
 ```
 
-**調整結果**:
-- 2µs/3µs: 新しいゲームのみ動作
-- 5µs/5µs: 新旧ゲーム両対応 ← **この値を使用**
-
-**注意**: PSXはACK受信後、次のバイト送信まで約10-15µsかかる場合がある。ACK後に20µs待機を追加すると安定性が向上。
+**ポイント**:
+- 固定値はプリディレイ5µsのみ。パルス幅/ウェイトは起動後に自動最適化。
+- タイミングクリティカル経路にprintfや不要なSEL参照を入れない。
 
 ### 問題5: Invalid/Timeout大量発生 → printf()によるタイミング違反
 
@@ -500,108 +497,28 @@ if (up_pressed && down_pressed) {
 **解決策**: 起動時にACKタイミングを自動調整するAuto-Tuning機能
 
 ```c
-// config.h - Auto-Tuning設定
+// config.h - Auto-Tuning設定（実装値の概要）
 #define ACK_AUTO_TUNE_ENABLED   1
+#define ACK_PULSE_WIDTH_MIN     1   /* µs */
+#define ACK_PULSE_WIDTH_MAX     6   /* µs */
+#define ACK_POST_WAIT_MIN       0   /* µs */
+#define ACK_POST_WAIT_MAX       6   /* µs */
+#define ACK_TUNE_TEST_TRANSACTIONS         8      /* 各組み合わせの評価回数 */
+#define ACK_TUNE_CMD_SUCCESS_THRESHOLD     0.5f   /* 成功率の閾値 */
+#define ACK_TUNE_IDLE_TIMEOUT_US           5000000/* 5秒アイドルでリセット */
 
-#if ACK_AUTO_TUNE_ENABLED
-// パラメータ探索範囲
-#define ACK_PULSE_WIDTH_MIN     1           // 最小パルス幅 (1µs for PS2)
-#define ACK_PULSE_WIDTH_MAX     6           // 最大パルス幅 (6µs for PS1)
-#define ACK_POST_WAIT_MIN       0           // 最小ウェイト (0µs)
-#define ACK_POST_WAIT_MAX       6           // 最大ウェイト (6µs)
-
-// 評価基準
-#define ACK_TUNE_TEST_TRANSACTIONS  8       // 各設定で8トランザクション試験
-#define ACK_TUNE_CMD_SUCCESS_THRESHOLD 0.5  // 成功率50%以上
-#define ACK_TUNE_IDLE_TIMEOUT_US    5000000 // 5秒間トランザクションなしでリセット
-#endif
-
-// psx_bitbang.c - Auto-Tuning状態管理
-static volatile uint32_t current_ack_pulse_width = ACK_PULSE_WIDTH_MAX;
-static volatile uint32_t current_ack_post_wait = ACK_POST_WAIT_MIN;
-static volatile uint32_t test_cmd_success = 0;     // 成功カウント
-static volatile uint32_t best_pulse_width = ACK_PULSE_WIDTH_MAX;
-static volatile uint32_t best_post_wait = ACK_POST_WAIT_MIN;
-static volatile float best_cmd_success_rate = -1.0f;
-static volatile bool tuning_complete = false;
-
-// Auto-Tuning評価関数
-void psx_ack_tune_on_command(bool cmd_success) {
-    if (tuning_complete) return;
-    
-    if (cmd_success) test_cmd_success++;
-    
-    // 8トランザクション経過したら評価
-    if (test_addr_count >= ACK_TUNE_TEST_TRANSACTIONS) {
-        float success_rate = (float)test_cmd_success / (float)test_addr_count;
-        
-        // 成功率が閾値以上なら候補として記録
-        if (success_rate >= ACK_TUNE_CMD_SUCCESS_THRESHOLD) {
-            bool is_better = false;
-            
-            // より高い成功率
-            if (success_rate > best_cmd_success_rate) {
-                is_better = true;
-            }
-            // 同じ成功率なら、短いWAIT優先、次に中間のPULSE優先
-            else if (success_rate == best_cmd_success_rate) {
-                if (current_ack_post_wait < best_post_wait) {
-                    is_better = true;
-                } else if (current_ack_post_wait == best_post_wait) {
-                    uint32_t pulse_mid = (ACK_PULSE_WIDTH_MIN + ACK_PULSE_WIDTH_MAX) / 2;
-                    int32_t current_dist = abs((int32_t)current_ack_pulse_width - (int32_t)pulse_mid);
-                    int32_t best_dist = abs((int32_t)best_pulse_width - (int32_t)pulse_mid);
-                    if (current_dist < best_dist) {
-                        is_better = true;
-                    }
-                }
-            }
-            
-            if (is_better) {
-                best_pulse_width = current_ack_pulse_width;
-                best_post_wait = current_ack_post_wait;
-                best_cmd_success_rate = success_rate;
-                printf("[ACK-TUNE] New best: PULSE=%lu, WAIT=%lu (%.1f%%)\n",
-                       current_ack_pulse_width, current_ack_post_wait,
-                       success_rate * 100.0f);
-            }
-        }
-        
-        // 次のパラメータ組み合わせに移行
-        // 探索順序: PULSE=大→小、各PULSEでWAIT=小→大
-        if (current_ack_post_wait < ACK_POST_WAIT_MAX) {
-            current_ack_post_wait++;
-        } else {
-            current_ack_post_wait = ACK_POST_WAIT_MIN;
-            if (current_ack_pulse_width > ACK_PULSE_WIDTH_MIN) {
-                current_ack_pulse_width--;
-            } else {
-                // 全組み合わせ探索完了
-                if (best_cmd_success_rate >= ACK_TUNE_CMD_SUCCESS_THRESHOLD) {
-                    current_ack_pulse_width = best_pulse_width;
-                    current_ack_post_wait = best_post_wait;
-                    tuning_complete = true;
-                    printf("[ACK-TUNE] LOCKED: PULSE=%lu us, WAIT=%lu us (%.0f%%)\n",
-                           best_pulse_width, best_post_wait, best_cmd_success_rate * 100.0f);
-                }
-            }
-        }
-        
-        // カウンタリセット
-        test_addr_count = 0;
-        test_cmd_success = 0;
-    }
-}
-
-// ACK送信（現在のパラメータ使用）
-void psx_send_ack(void) {
-    busy_wait_us_32(5);  // 固定ウェイト（psx_send_ackの最初）
-    busy_wait_us_32(current_ack_post_wait);  // 可変ウェイト
-    gpio_out_low(PIN_ACK);
-    busy_wait_us_32(current_ack_pulse_width);  // 可変パルス幅
-    gpio_hi_z(PIN_ACK);
-}
+// 探索戦略（実装仕様）
+// 1) PULSEを大→小で走査
+// 2) 各PULSEでWAITを小→大で走査
+// 3) 同率なら 短いWAIT を優先、さらに PULSEは中央値に近い方 を優先
+// 4) 5sアイドルでチューニング状態をリセット（直後のトランザクションは評価に使用）
+// 5) タイミングクリティカル経路にprintf/SEL参照を置かない
 ```
+
+**効果**:
+- PS1/PS2両対応、起動後しばらくで自動LOCK。
+- PS2で発生していた「取引は進むが入力が効かない」問題を解消。
+- アイドル5秒で再学習するため、機器やケーブル交換にも追従。
 
 **効果**:
 - PS1/PS2両対応、起動時に自動的に最適なタイミングを検出
@@ -610,13 +527,14 @@ void psx_send_ack(void) {
 
 ---
 
-## デバッグモード動的切り替え
+## ランタイム設定と永続化（シリアルコマンド）
 
-起動後にシリアルコマンドでデバッグモードをON/OFFできる機能。
+起動後にシリアルから各種設定をトグル/保存できます。
 
 ```c
 // main.c - グローバル変数
-bool debug_mode = DEBUG_ENABLED;  // config.hのデフォルト値で初期化
+bool debug_mode = DEBUG_ENABLED;  // config.hのデフォルト
+bool latching_mode = BUTTON_LATCHING_MODE; // 起動時デフォルト（後述のFlashから上書き可）
 
 // メインループでシリアル入力チェック
 while (1) {
@@ -632,6 +550,14 @@ while (1) {
                 if (strcmp(cmd_buffer, "debug") == 0) {
                     debug_mode = !debug_mode;
                     printf("\n>>> Debug mode: %s\n\n", debug_mode ? "ON" : "OFF");
+                } else if (strcmp(cmd_buffer, "latch") == 0) {
+                    latching_mode = !latching_mode;
+                    printf("\n>>> Latching: %s\n\n", latching_mode ? "ON" : "OFF");
+                } else if (strcmp(cmd_buffer, "save") == 0) {
+                    flash_save_settings(debug_mode, latching_mode);
+                    printf("\n>>> Saved to Flash\n\n");
+                } else if (strcmp(cmd_buffer, "help") == 0 || strcmp(cmd_buffer, "?") == 0) {
+                    print_startup_message();
                 }
                 
                 cmd_pos = 0;
@@ -673,9 +599,9 @@ help [Enter]    # ヘルプ表示
 
 **Flash保存機能**:
 - `save`コマンドで現在の設定（debug_mode, latching_mode）をFlashに保存
-- 次回起動時に自動的に読み込まれる
-- Flashの最終セクター（4KB）を使用
-- 保存時はCore1を一時停止し、完了後に自動再開
+- 次回起動時に自動的に読み込まれる（起動時に検証し有効なら反映）
+- Flashの最終セクターを使用、ページ単位（256B）で書き込み
+- 保存中はCore1を一時停止し、完了後に再起動（freezeを防止）
 
 ---
 
@@ -824,6 +750,7 @@ add_executable(pico-psx-controller-bitbang
     src/psx_bitbang.c
     src/button_input.c
     src/shared_state.c
+    src/flash_config.c
 )
 
 target_link_libraries(pico-psx-controller-bitbang
@@ -831,6 +758,8 @@ target_link_libraries(pico-psx-controller-bitbang
     pico_multicore
     hardware_gpio
     hardware_timer
+    hardware_flash
+    hardware_sync
 )
 
 pico_add_extra_outputs(pico-psx-controller-bitbang)
@@ -854,7 +783,7 @@ ninja  # または make -j4
 
 **原因と対処**:
 1. ✅ **printf()除去**: タイミング重要関数から全てのprintf()を削除済み
-2. ✅ **ACKタイミング**: 5µs/5µsに調整済み（旧ゲーム対応）
+2. ✅ **ACK Auto-Tune**: 起動直後にLOCKされているか確認（未LOCK時は5秒アイドルで再学習）
 3. ✅ **GPIO初期化順序**: gpio_set_function()を先に実行
 
 ### 問題: メモリーカードと干渉
@@ -880,7 +809,7 @@ ninja  # または make -j4
 // デバッグ出力 (0=無効推奨, 1=有効)
 #define DEBUG_ENABLED 0
 
-// ボタン入力モード
+// ボタン入力モード（起動時デフォルト。起動後はシリアルで切替可）
 // 0 = Direct (通常プレイ)
 // 1 = Latching (格闘ゲーム推奨)
 #define BUTTON_LATCHING_MODE 0
@@ -888,9 +817,18 @@ ninja  # または make -j4
 // ボタンサンプリング間隔 (µs)
 #define BUTTON_POLL_INTERVAL_US 1000  // 1kHz
 
-// ACKタイミング (µs) - 変更非推奨
-#define ACK_DELAY_US        5
-#define ACK_PULSE_WIDTH_US  5
+// ACK固定プリディレイ (µs) - psx_send_ack内の最初の待ち（固定値）
+#define ACK_DELAY_US 5
+
+// ACK Auto-Tune 設定（幅/待ちの探索範囲と評価条件）
+#define ACK_AUTO_TUNE_ENABLED 1
+#define ACK_PULSE_WIDTH_MIN   1
+#define ACK_PULSE_WIDTH_MAX   6
+#define ACK_POST_WAIT_MIN     0
+#define ACK_POST_WAIT_MAX     6
+#define ACK_TUNE_TEST_TRANSACTIONS     8
+#define ACK_TUNE_CMD_SUCCESS_THRESHOLD 0.5f
+#define ACK_TUNE_IDLE_TIMEOUT_US       5000000  // 5s
 ```
 
 ### 用途別推奨設定
@@ -941,6 +879,10 @@ AIにこのプロジェクトを実装させる際、以下を必ず指示・確
 - [ ] メモリーカードアドレス(0x81)を最優先チェック
 - [ ] メモリーカードトランザクション中はSEL HIGH待機
 - [ ] ACK Auto-Tuning実装（PULSE: 1-6µs, WAIT: 0-6µs探索）
+- [ ] 探索順序: PULSE 大→小、各PULSEで WAIT 小→大
+- [ ] 同率時の優先: WAIT短優先 → PULSE中央値近傍
+- [ ] 5秒アイドルでチューニングリセット（直後の取引で評価継続）
+- [ ] ACK経路にprintf/SEL参照を置かない（タイミング保護）
 - [ ] タイミングクリティカル関数から全printf()削除
 
 ### ボタン処理フェーズ
@@ -953,7 +895,13 @@ AIにこのプロジェクトを実装させる際、以下を必ず指示・確
 - [ ] ポーリング間隔統計（min/max/avg、0x42コマンド実行時のみ計測）
 - [ ] ボタンサンプリング統計（実測値）
 - [ ] ACK Auto-Tuning状態表示（waiting.../tuning.../LOCKED）
-- [ ] シリアルコマンドでデバッグモード動的切り替え（"debug"入力）
+- [ ] シリアルコマンド: debug/latch/save/help/? を実装
+- [ ] LEDパターン切替: debug ON=Polling時点灯 / OFF=1(Ready),2/3(Polling),Error=高速点滅
+
+### 永続化フェーズ
+- [ ] 起動時にFlashから設定（debug/latching）読込（妥当性チェック）
+- [ ] saveで最後のセクタに保存（256Bページ書込）
+- [ ] 保存中にCore1停止→完了後に再起動（freeze回避）
 
 ### 動作確認
 - [ ] Invalid: 0, Timeout: 0 を達成

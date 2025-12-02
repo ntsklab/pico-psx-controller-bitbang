@@ -22,7 +22,7 @@
 #include "pico/stdlib.h"
 
 // ============================================================================
-// PSX/PS2 Bus Signal Pin Definitions (固定・変更不可)
+// PSX/PS2 Bus Signal Pin Definitions
 // ============================================================================
 
 #define PIN_DAT 3  // Data line (Open-drain, bidirectional)
@@ -32,12 +32,12 @@
 #define PIN_ACK 7  // Acknowledge (Open-drain output to PSX)
 
 // ============================================================================
-// Button Input GPIO Pin Definitions (固定・変更不可)
+// Button Input GPIO Pin Definitions 
 // ============================================================================
 
 // Face buttons
 #define BTN_CIRCLE 22   // ○
-#define BTN_CROSS 21    // ×
+#define BTN_CROSS 21    // ☓
 #define BTN_TRIANGLE 20 // △
 #define BTN_SQUARE 19   // □
 
