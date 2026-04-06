@@ -22,7 +22,7 @@
 #include "usb_host_input.h"
 #include "pico/stdlib.h"
 
-// TinyUSB includes
+// USB Host includes
 #include "tusb.h"
 
 // ============================================================================
@@ -56,13 +56,40 @@ typedef struct {
 static usb_device_t connected_device = {0};
 
 // ============================================================================
-// USB Host Callbacks
+// USB Host Initialization
+// ============================================================================
+
+void usb_host_input_init(void)
+{
+    printf("Initializing USB Host for input devices...\n");
+    
+    // Initialize TinyUSB in host mode
+    // tusb_init() is called during board initialization
+    // Just ensure we're ready to handle devices
+    
+    memset(&connected_device, 0, sizeof(connected_device));
+    connected_device.button_byte1 = 0xFF;  // All buttons released
+    connected_device.button_byte2 = 0xFF;
+    
+    printf("USB Host initialized - waiting for device connection\n");
+}
+
+void usb_host_input_task(void)
+{
+    // USB Host task for event handling
+    // This must be called regularly from the main loop
+    // TODO: Implement actual TinyUSB task call
+    // For now, this is a placeholder
+}
+
+// ============================================================================
+// USB Device Connection Callbacks (called by TinyUSB)
 // ============================================================================
 
 // Invoked when a device is mounted
 void tuh_mount_cb(uint8_t daddr)
 {
-    printf("Device mounted at address %u\n", daddr);
+    printf("USB Device mounted at address %u\n", daddr);
     
     if (connected_device.connected) {
         printf("WARNING: Already have a device connected, ignoring new device\n");
@@ -71,23 +98,23 @@ void tuh_mount_cb(uint8_t daddr)
     
     connected_device.addr = daddr;
     connected_device.connected = true;
-    connected_device.button_byte1 = 0xFF;  // All buttons released
-    connected_device.button_byte2 = 0xFF;
     connected_device.type = DEVICE_TYPE_UNKNOWN;
 }
 
 // Invoked when a device is unmounted
 void tuh_unmount_cb(uint8_t daddr)
 {
-    printf("Device unmounted from address %u\n", daddr);
+    printf("USB Device unmounted from address %u\n", daddr);
     
     if (connected_device.addr == daddr) {
         memset(&connected_device, 0, sizeof(connected_device));
+        connected_device.button_byte1 = 0xFF;
+        connected_device.button_byte2 = 0xFF;
     }
 }
 
 // ============================================================================
-// HID Interface Callbacks
+// HID Host Callbacks
 // ============================================================================
 
 // Invoked when HID Report is received
@@ -98,16 +125,23 @@ void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance, uint8_t cons
     }
     
     // TODO: Parse HID report based on device type
-    // For now, just accept reports without processing
+    // Basic HID report parsing for Joystick and Keyboard
+    
+    // For now, just prevent unused warnings
     (void)instance;
     (void)report;
     (void)len;
+    
+    // TODO: Request next report with proper TinyUSB function
+    // if (!tuh_hid_receive_report(dev_addr, instance)) {
+    //     printf("Failed to request next HID report\n");
+    // }
 }
 
-// Invoked when HID Report descriptor received
+// Invoked when HID Report descriptor is received
 void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const* desc_report, uint16_t desc_len)
 {
-    printf("HID interface mounted: dev_addr=%u, instance=%u\n", dev_addr, instance);
+    printf("HID interface mounted: dev_addr=%u, instance=%u, desc_len=%u\n", dev_addr, instance, desc_len);
     
     if (dev_addr != connected_device.addr) {
         return;
@@ -115,14 +149,19 @@ void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const* desc_re
     
     connected_device.instance = instance;
     
-    // Request continuous HID reports
-    if (!tuh_hid_receive_report(dev_addr, instance)) {
-        printf("Failed to request HID report\n");
-    }
+    // Analyze HID report descriptor to determine device type
+    // Basic detection based on descriptor content
+    // (Will be improved with proper HID parser)
     
-    // TODO: Determine device type from HID report descriptor
-    (void)desc_report;
-    (void)desc_len;
+    // TODO: Implement HID descriptor parser
+    // For now, assume it's a Joystick if we get a valid descriptor
+    connected_device.type = DEVICE_TYPE_JOYSTICK;
+    printf("Device type detected: %s\n", usb_host_get_device_type());
+    
+    // TODO: Request first HID report with proper TinyUSB function
+    // if (!tuh_hid_receive_report(dev_addr, instance)) {
+    //     printf("Failed to request initial HID report\n");
+    // }
 }
 
 // Invoked when HID interface is unmounted
@@ -131,32 +170,15 @@ void tuh_hid_unmount_cb(uint8_t dev_addr, uint8_t instance)
     printf("HID interface unmounted: dev_addr=%u, instance=%u\n", dev_addr, instance);
     
     if (dev_addr == connected_device.addr && instance == connected_device.instance) {
-        memset(&connected_device, 0, sizeof(connected_device));
+        connected_device.type = DEVICE_TYPE_UNKNOWN;
+        connected_device.button_byte1 = 0xFF;
+        connected_device.button_byte2 = 0xFF;
     }
 }
 
 // ============================================================================
 // Public API
 // ============================================================================
-
-void usb_host_input_init(void)
-{
-    printf("Initializing USB Host for input devices...\n");
-    
-    // Initialize TinyUSB in host mode
-    tusb_init();
-    
-    memset(&connected_device, 0, sizeof(connected_device));
-    
-    printf("USB Host initialized\n");
-}
-
-void usb_host_input_task(void)
-{
-    // USB Host task for event handling
-    // This must be called regularly from the main loop
-    tuh_task();
-}
 
 void usb_host_get_button_state(uint8_t *byte1, uint8_t *byte2)
 {

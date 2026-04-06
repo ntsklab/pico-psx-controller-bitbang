@@ -53,8 +53,10 @@ pico_set_program_name(pico-psx-controller-bitbang "PSX Controller BitBang")
 pico_set_program_version(pico-psx-controller-bitbang "1.0")
 
 # Modify the below lines to enable/disable output over UART/USB
-pico_enable_stdio_uart(pico-psx-controller-bitbang 0)
-pico_enable_stdio_usb(pico-psx-controller-bitbang 1)
+# Note: USB Host and USB Device cannot be enabled simultaneously
+# Since we're using USB Host for input devices, disable USB stdio
+pico_enable_stdio_uart(pico-psx-controller-bitbang 1)
+pico_enable_stdio_usb(pico-psx-controller-bitbang 0)
 
 # Add the standard library to the build
 target_link_libraries(pico-psx-controller-bitbang
