@@ -40,6 +40,7 @@ add_executable(pico-psx-controller-bitbang
     src/psx_protocol.c
     src/psx_bitbang.c
     src/usb_host_input.c
+    src/xinput_host_driver.c
     src/shared_state.c
     src/flash_config.c
 )

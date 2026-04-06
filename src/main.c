@@ -52,7 +52,7 @@ void print_startup_message(void)
     printf("==========================================\n");
     printf("  PSX Controller Bit-Banging Simulator\n");
     printf("==========================================\n");
-    printf("System ready.\n");
+    printf("System ready (USB Host input mode).\n");
     printf("Commands:\n");
     printf("  debug      - Toggle debug mode\n");
     printf("  latch      - Toggle latching mode\n");
@@ -193,7 +193,7 @@ void core1_entry(void)
 
 int main(void)
 {
-    // Initialize standard I/O (USB serial for debugging)
+    // Initialize standard I/O (UART for debugging)
     stdio_init_all();
 
     // Small delay to allow USB to initialize

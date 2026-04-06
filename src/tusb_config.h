@@ -20,27 +20,61 @@
 #ifndef TUSB_CONFIG_H
 #define TUSB_CONFIG_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // ============================================================================
 // TinyUSB Host Configuration
 // ============================================================================
 
-// Operating System is Linux (for host)
+// Defined by compiler flags from pico-sdk integration.
+#ifndef CFG_TUSB_MCU
+#error CFG_TUSB_MCU must be defined
+#endif
+
+#ifndef CFG_TUSB_OS
 #define CFG_TUSB_OS OPT_OS_PICO
+#endif
 
-// Operate in USB Host mode
-#define CFG_TUSB_HOST 1
-#define CFG_TUSB_DEVICE 0
+#ifndef CFG_TUSB_DEBUG
+#define CFG_TUSB_DEBUG 0
+#endif
 
-// Maximum device count (we only need 1 input device)
+// Host-only build.
+#define CFG_TUH_ENABLED 1
+#define CFG_TUD_ENABLED 0
+
+// RP2040 native USB host is on RHPort 0.
+#ifndef BOARD_TUH_RHPORT
+#define BOARD_TUH_RHPORT 0
+#endif
+
+#ifndef BOARD_TUH_MAX_SPEED
+#define BOARD_TUH_MAX_SPEED OPT_MODE_DEFAULT_SPEED
+#endif
+
+#define CFG_TUH_MAX_SPEED BOARD_TUH_MAX_SPEED
+
+// Single controller device expected at a time.
 #define CFG_TUH_DEVICE_MAX 1
+#define CFG_TUH_ENUMERATION_BUFSIZE 256
 
-// Maximum HID device count
-#define CFG_TUH_HID 1
-
-// HID configuration
+// HID for joystick + keyboard, plus app custom class driver for XInput.
+#define CFG_TUH_HID 4
 #define CFG_TUH_HID_EPIN_BUFSIZE 64
+#define CFG_TUH_VENDOR 0
 
-// Enable general debug logs
-// #define CFG_TUSB_DEBUG 2
+#ifndef CFG_TUH_MEM_SECTION
+#define CFG_TUH_MEM_SECTION
+#endif
+
+#ifndef CFG_TUH_MEM_ALIGN
+#define CFG_TUH_MEM_ALIGN __attribute__((aligned(4)))
+#endif
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // TUSB_CONFIG_H

@@ -32,32 +32,6 @@
 #define PIN_ACK 7  // Acknowledge (Open-drain output to PSX)
 
 // ============================================================================
-// Button Input GPIO Pin Definitions 
-// ============================================================================
-
-// Face buttons
-#define BTN_CIRCLE 22   // ○
-#define BTN_CROSS 21    // ☓
-#define BTN_TRIANGLE 20 // △
-#define BTN_SQUARE 19   // □
-
-// Shoulder buttons
-#define BTN_L1 14
-#define BTN_R1 12
-#define BTN_L2 13
-#define BTN_R2 11
-
-// D-pad
-#define BTN_UP 18
-#define BTN_DOWN 17
-#define BTN_LEFT 16
-#define BTN_RIGHT 15
-
-// System buttons
-#define BTN_START 26
-#define BTN_SELECT 27
-
-// ============================================================================
 // Status LED
 // ============================================================================
 
