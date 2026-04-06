@@ -88,6 +88,11 @@
 // 1: Latching mode - Button presses are held until PSX reads them (guarantees detection)
 #define BUTTON_LATCHING_MODE 1
 
+// SOCD cleaner mode
+// 0: Disabled (keep simultaneous opposite directions as-is)
+// 1: Enabled (Left+Right and Up+Down => Neutral)
+#define SOCD_CLEANER_ENABLED 0
+
 // ============================================================================
 // PSX Protocol Constants
 // ============================================================================

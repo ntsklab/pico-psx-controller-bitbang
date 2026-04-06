@@ -103,6 +103,7 @@ void shared_state_read(uint8_t *btn1, uint8_t *btn2)
         latched_btn2 = 0xFF;
     }
 
+#if SOCD_CLEANER_ENABLED
     // ========================================================================
     // SOCD (Simultaneous Opposite Cardinal Direction) Cleaner - HitBox style
     // ========================================================================
@@ -130,4 +131,5 @@ void shared_state_read(uint8_t *btn1, uint8_t *btn2)
         *btn1 |= 0x10; // Release UP
         *btn1 |= 0x40; // Release DOWN
     }
+#endif
 }

@@ -117,6 +117,11 @@ static inline void psx_set_pressed(uint8_t* b, uint8_t bit, bool pressed)
     }
 }
 
+static inline bool is_arduino_vid(uint16_t vid)
+{
+    return (vid == 0x2341u || vid == 0x2A03u);
+}
+
 static inline uint8_t device_type_priority(device_type_t type)
 {
     switch (type) {
@@ -382,47 +387,35 @@ static bool parse_xinput_report(uint8_t const* report, uint16_t len)
 
 static bool parse_arduino_joystick_report(uint8_t const* report, uint16_t len)
 {
-    uint16_t idx = 1;
     uint32_t buttons = 0;
-    uint8_t hat = 0x0F;
+    uint8_t hat0 = 0x08;
+    uint8_t hat1 = 0x08;
     uint16_t x = 512;
     uint16_t y = 512;
     uint16_t rx = 512;
     uint16_t ry = 512;
-    uint16_t remaining;
 
-    // ArduinoJoystickLibrary default report has Report ID 0x03.
+    // ArduinoJoystickLibrary default report layout (with Report ID):
+    // [0]=ReportID(0x03), [1..4]=buttons(32), [5]=hat0/hat1 packed,
+    // [6..]=16-bit axis values (x,y,z,rx,ry,...)
     if (!(len >= 2 && report[0] == 0x03)) {
         return false;
     }
 
-    if (len <= idx + 2) {
+    // Need at least ID + buttons + hats + x/y + rx to decode safely.
+    if (len < 16u) {
         return false;
     }
 
-    remaining = len - idx;
-
-    if (remaining >= 4) {
-        buttons = read_le32(&report[idx]);
-        idx += 4;
-        remaining -= 4;
-    } else if (remaining >= 2) {
-        buttons = read_le16(&report[idx]);
-        idx += 2;
-        remaining -= 2;
+    buttons = read_le32(&report[1]);
+    hat0 = (uint8_t) (report[5] & 0x0Fu);
+    hat1 = (uint8_t) ((report[5] >> 4) & 0x0Fu);
+    x = read_le16(&report[6]);
+    y = read_le16(&report[8]);
+    rx = read_le16(&report[12]);
+    if (len >= 18u) {
+        ry = read_le16(&report[14]);
     }
-
-    if (remaining > 0) {
-        hat = report[idx] & 0x0F;
-        idx++;
-        remaining--;
-    }
-
-    if (remaining >= 2) { x = read_le16(&report[idx]); idx += 2; remaining -= 2; }
-    if (remaining >= 2) { y = read_le16(&report[idx]); idx += 2; remaining -= 2; }
-    if (remaining >= 2) { (void) read_le16(&report[idx]); idx += 2; remaining -= 2; } // z
-    if (remaining >= 2) { rx = read_le16(&report[idx]); idx += 2; remaining -= 2; }
-    if (remaining >= 2) { ry = read_le16(&report[idx]); idx += 2; remaining -= 2; }
 
     reset_input_state();
 
@@ -439,8 +432,10 @@ static bool parse_arduino_joystick_report(uint8_t const* report, uint16_t len)
     psx_set_pressed(&g_dev.button_byte1, 1, (buttons & (1u << 10)) != 0);  // L3
     psx_set_pressed(&g_dev.button_byte1, 2, (buttons & (1u << 11)) != 0);  // R3
 
-    if (hat <= 7u) {
-        set_dpad_from_hat(hat);
+    if (hat0 <= 7u) {
+        set_dpad_from_hat(hat0);
+    } else if (hat1 <= 7u) {
+        set_dpad_from_hat(hat1);
     } else {
         set_dpad_from_axes_u16(x, y);
     }
@@ -837,7 +832,7 @@ void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance, uint8_t cons
             if (source_is_active) {
                 // Keep explicit VID/PID branching, but avoid auto-detect heuristics.
                 // Leonardo (ArduinoJoystickLibrary) and compatible boards.
-                if (g_dev.vid == 0x2341u || g_dev.vid == 0x2A03u) {
+                if (is_arduino_vid(g_dev.vid)) {
                     parsed = parse_arduino_joystick_report(report, len);
                     if (!parsed) {
                         parsed = parse_simple_gamepad_axis_first(report, len);
@@ -864,6 +859,10 @@ void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance, uint8_t cons
                     }
                     if (!parsed) {
                         parsed = parse_xinput_report(report, len);
+                    }
+                    if (!parsed) {
+                        // Allow ArduinoJoystickLibrary-compatible clones with non-Arduino VID.
+                        parsed = parse_arduino_joystick_report(report, len);
                     }
                 }
             }
