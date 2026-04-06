@@ -25,7 +25,7 @@
 
 #include "config.h"
 #include "shared_state.h"
-#include "button_input.h"
+#include "usb_host_input.h"
 #include "psx_protocol.h"
 #include "flash_config.h"
 
@@ -215,8 +215,8 @@ int main(void)
     led_init();
     led_set_status(LED_READY);
 
-    // Initialize button inputs
-    button_input_init();
+    // Initialize USB Host for input devices
+    usb_host_input_init();
 
     // Initialize shared state
     shared_state_init();
@@ -225,18 +225,8 @@ int main(void)
     // Launch Core 1 for PSX communication
     multicore_launch_core1(core1_entry);
 
-    // Core 0 main loop - button polling
+    // Core 0 main loop - USB Host processing
     uint32_t last_stats_print = 0;
-
-    // Button sampling statistics
-    uint32_t sample_count = 0;
-    uint32_t last_sample_time = 0;
-    uint32_t min_sample_interval = 0;
-    uint32_t max_sample_interval = 0;
-    uint64_t total_sample_interval = 0;
-
-    // Time-based sampling control
-    uint32_t next_sample_time = time_us_32();
 
     // Button state variables
     uint8_t btn1 = 0xFF;
@@ -294,37 +284,14 @@ int main(void)
                 cmd_buffer[cmd_pos++] = ch;
             }
         }
-        // Check if it's time to sample buttons
-        uint32_t current_time = time_us_32();
-        if ((int32_t)(next_sample_time - current_time) <= 0)
-        {
-            // Time to sample - read button states
-            btn1 = button_read_byte1();
-            btn2 = button_read_byte2();
-
-            // Calculate actual sampling interval
-            if (last_sample_time != 0)
-            {
-                uint32_t interval = current_time - last_sample_time;
-                if (min_sample_interval == 0 || interval < min_sample_interval)
-                {
-                    min_sample_interval = interval;
-                }
-                if (interval > max_sample_interval)
-                {
-                    max_sample_interval = interval;
-                }
-                total_sample_interval += interval;
-                sample_count++;
-            }
-            last_sample_time = current_time;
-
-            // Schedule next sample
-            next_sample_time += BUTTON_POLL_INTERVAL_US;
-
-            // Write to shared state for Core 1
-            shared_state_write(btn1, btn2);
-        }
+        // Process USB Host events
+        usb_host_input_task();
+        
+        // Get current button state from USB device
+        usb_host_get_button_state(&btn1, &btn2);
+        
+        // Write to shared state for Core 1
+        shared_state_write(btn1, btn2);
 
         // Update LED and statistics
         static uint64_t last_trans_count = 0;
@@ -446,15 +413,11 @@ int main(void)
                     printf("PSX Polling Rate:  %.2f Hz\n", 1000000.0f / stats.avg_interval_us);
                 }
 
-                // Button sampling statistics
-                printf("BTN Target Rate:   %.2f Hz (%lu us)\n",
-                       1000000.0f / BUTTON_POLL_INTERVAL_US, (uint32_t)BUTTON_POLL_INTERVAL_US);
-                if (sample_count > 0)
-                {
-                    uint32_t avg_sample_interval = (uint32_t)(total_sample_interval / sample_count);
-                    printf("BTN Interval (us): Min=%lu, Max=%lu, Avg=%lu\n",
-                           min_sample_interval, max_sample_interval, avg_sample_interval);
-                    printf("BTN Sample Rate:   %.2f Hz (actual)\n", 1000000.0f / avg_sample_interval);
+                // USB Host device status
+                if (usb_host_is_device_connected()) {
+                    printf("USB Device: %s\n", usb_host_get_device_type());
+                } else {
+                    printf("USB Device: Not connected\n");
                 }
 
                 printf("Buttons:      0x%02X 0x%02X\n", btn1, btn2);
@@ -493,10 +456,6 @@ int main(void)
 
                 // Reset interval statistics for next period
                 psx_reset_interval_stats();
-                sample_count = 0;
-                min_sample_interval = 0;
-                max_sample_interval = 0;
-                total_sample_interval = 0;
 
                 last_stats_print = now;
             }

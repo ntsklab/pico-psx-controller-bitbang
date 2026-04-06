@@ -39,7 +39,7 @@ add_executable(pico-psx-controller-bitbang
     src/main.c
     src/psx_protocol.c
     src/psx_bitbang.c
-    src/button_input.c
+    src/usb_host_input.c
     src/shared_state.c
     src/flash_config.c
 )
@@ -60,6 +60,8 @@ pico_enable_stdio_usb(pico-psx-controller-bitbang 1)
 target_link_libraries(pico-psx-controller-bitbang
         pico_stdlib
         pico_multicore
+        tinyusb_host
+        tinyusb_board
         hardware_gpio
         hardware_timer
         hardware_flash
