@@ -66,6 +66,8 @@ typedef struct {
 #define XINPUT_TRIGGER_THRESHOLD 32u
 
 static usb_device_t g_dev;
+static bool g_hid_mounted[CFG_TUH_HID];
+static uint8_t g_hid_protocol[CFG_TUH_HID];
 
 static inline uint16_t read_le16(uint8_t const* p)
 {
@@ -115,6 +117,54 @@ static inline void psx_set_pressed(uint8_t* b, uint8_t bit, bool pressed)
     }
 }
 
+static inline uint8_t device_type_priority(device_type_t type)
+{
+    switch (type) {
+        case DEVICE_TYPE_KEYBOARD:
+            return 3;
+        case DEVICE_TYPE_XINPUT:
+            return 2;
+        case DEVICE_TYPE_JOYSTICK:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+static inline const char* device_type_to_str(device_type_t type)
+{
+    switch (type) {
+        case DEVICE_TYPE_JOYSTICK:
+            return "Joystick";
+        case DEVICE_TYPE_XINPUT:
+            return "XInput";
+        case DEVICE_TYPE_KEYBOARD:
+            return "Keyboard";
+        default:
+            return "Unknown";
+    }
+}
+
+static inline device_type_t classify_hid_interface(uint8_t protocol, uint16_t vid)
+{
+    if (protocol == HID_ITF_PROTOCOL_KEYBOARD) {
+        return DEVICE_TYPE_KEYBOARD;
+    }
+
+    // Microsoft VID is a strong hint for Xbox/XInput-style devices.
+    if (vid == 0x045E) {
+        return DEVICE_TYPE_XINPUT;
+    }
+
+    // Mouse interface of composite keyboards must not override keyboard handling.
+    if (protocol == HID_ITF_PROTOCOL_MOUSE) {
+        return DEVICE_TYPE_UNKNOWN;
+    }
+
+    // Most gamepads/joysticks are HID protocol NONE.
+    return DEVICE_TYPE_JOYSTICK;
+}
+
 static void reset_input_state(void)
 {
     g_dev.button_byte1 = 0xFF;
@@ -126,10 +176,67 @@ static void reset_input_state(void)
     g_dev.has_analog = false;
 }
 
+static void clear_hid_table(void)
+{
+    for (uint8_t i = 0; i < CFG_TUH_HID; i++) {
+        g_hid_mounted[i] = false;
+        g_hid_protocol[i] = HID_ITF_PROTOCOL_NONE;
+    }
+}
+
 static void reset_device_state(void)
 {
     memset(&g_dev, 0, sizeof(g_dev));
     reset_input_state();
+    clear_hid_table();
+}
+
+static void activate_source(uint8_t dev_addr, uint8_t instance, device_type_t type,
+                            uint8_t protocol, bool xinput_custom_driver, bool reset_state)
+{
+    g_dev.connected = true;
+    g_dev.addr = dev_addr;
+    g_dev.instance = instance;
+    g_dev.type = type;
+    g_dev.hid_protocol = protocol;
+    g_dev.xinput_custom_driver = xinput_custom_driver;
+
+    if (reset_state) {
+        reset_input_state();
+    }
+}
+
+static bool select_best_hid_source(uint8_t dev_addr)
+{
+    uint8_t best_instance = 0xFF;
+    uint8_t best_protocol = HID_ITF_PROTOCOL_NONE;
+    device_type_t best_type = DEVICE_TYPE_UNKNOWN;
+    uint8_t best_prio = 0;
+
+    for (uint8_t i = 0; i < CFG_TUH_HID; i++) {
+        device_type_t candidate;
+        uint8_t prio;
+
+        if (!g_hid_mounted[i]) {
+            continue;
+        }
+
+        candidate = classify_hid_interface(g_hid_protocol[i], g_dev.vid);
+        prio = device_type_priority(candidate);
+        if (prio > best_prio) {
+            best_prio = prio;
+            best_type = candidate;
+            best_protocol = g_hid_protocol[i];
+            best_instance = i;
+        }
+    }
+
+    if (best_instance == 0xFF || best_type == DEVICE_TYPE_UNKNOWN) {
+        return false;
+    }
+
+    activate_source(dev_addr, best_instance, best_type, best_protocol, false, true);
+    return true;
 }
 
 static void set_dpad_from_hat(uint8_t hat)
@@ -185,7 +292,6 @@ static bool key_in_report(hid_keyboard_report_t const* report, uint8_t key)
 static void parse_keyboard_report(hid_keyboard_report_t const* report)
 {
     reset_input_state();
-    g_dev.type = DEVICE_TYPE_KEYBOARD;
 
     // Direction keys
     psx_set_pressed(&g_dev.button_byte1, 4, key_in_report(report, HID_KEY_ARROW_UP));
@@ -270,14 +376,13 @@ static bool parse_xinput_report(uint8_t const* report, uint16_t len)
     g_dev.rx = scale_signed16_to_u8(rx);
     g_dev.ry = scale_signed16_to_u8((int16_t) -ry);
     g_dev.has_analog = true;
-    g_dev.type = DEVICE_TYPE_XINPUT;
 
     return true;
 }
 
 static bool parse_arduino_joystick_report(uint8_t const* report, uint16_t len)
 {
-    uint16_t idx = 0;
+    uint16_t idx = 1;
     uint32_t buttons = 0;
     uint8_t hat = 0x0F;
     uint16_t x = 512;
@@ -286,8 +391,9 @@ static bool parse_arduino_joystick_report(uint8_t const* report, uint16_t len)
     uint16_t ry = 512;
     uint16_t remaining;
 
-    if (len >= 2 && report[0] == 0x03) {
-        idx = 1;
+    // ArduinoJoystickLibrary default report has Report ID 0x03.
+    if (!(len >= 2 && report[0] == 0x03)) {
+        return false;
     }
 
     if (len <= idx + 2) {
@@ -344,7 +450,112 @@ static bool parse_arduino_joystick_report(uint8_t const* report, uint16_t len)
     g_dev.rx = scale_u16_to_u8(rx);
     g_dev.ry = scale_u16_to_u8(ry);
     g_dev.has_analog = true;
-    g_dev.type = DEVICE_TYPE_JOYSTICK;
+
+    return true;
+}
+
+static bool parse_simple_gamepad_axis_first(uint8_t const* report, uint16_t len)
+{
+    uint16_t offset = 0;
+    uint8_t lx;
+    uint8_t ly;
+    uint8_t rx;
+    uint8_t ry;
+    uint8_t hat;
+    uint16_t buttons;
+
+    if (len >= 9 && report[0] <= 0x0Fu) {
+        offset = 1;
+    }
+
+    if (len < (uint16_t) (offset + 7)) {
+        return false;
+    }
+
+    lx = report[offset + 0];
+    ly = report[offset + 1];
+    rx = report[offset + 2];
+    ry = report[offset + 3];
+    hat = report[offset + 4] & 0x0F;
+    buttons = read_le16(&report[offset + 5]);
+
+    reset_input_state();
+
+    psx_set_pressed(&g_dev.button_byte2, 6, (buttons & (1u << 0)) != 0);   // CROSS
+    psx_set_pressed(&g_dev.button_byte2, 5, (buttons & (1u << 1)) != 0);   // CIRCLE
+    psx_set_pressed(&g_dev.button_byte2, 7, (buttons & (1u << 2)) != 0);   // SQUARE
+    psx_set_pressed(&g_dev.button_byte2, 4, (buttons & (1u << 3)) != 0);   // TRIANGLE
+    psx_set_pressed(&g_dev.button_byte2, 2, (buttons & (1u << 4)) != 0);   // L1
+    psx_set_pressed(&g_dev.button_byte2, 3, (buttons & (1u << 5)) != 0);   // R1
+    psx_set_pressed(&g_dev.button_byte2, 0, (buttons & (1u << 6)) != 0);   // L2
+    psx_set_pressed(&g_dev.button_byte2, 1, (buttons & (1u << 7)) != 0);   // R2
+    psx_set_pressed(&g_dev.button_byte1, 0, (buttons & (1u << 8)) != 0);   // SELECT
+    psx_set_pressed(&g_dev.button_byte1, 3, (buttons & (1u << 9)) != 0);   // START
+    psx_set_pressed(&g_dev.button_byte1, 1, (buttons & (1u << 10)) != 0);  // L3
+    psx_set_pressed(&g_dev.button_byte1, 2, (buttons & (1u << 11)) != 0);  // R3
+
+    if (hat <= 7u) {
+        set_dpad_from_hat(hat);
+    }
+
+    g_dev.lx = lx;
+    g_dev.ly = ly;
+    g_dev.rx = rx;
+    g_dev.ry = ry;
+    g_dev.has_analog = true;
+
+    return true;
+}
+
+static bool parse_simple_gamepad_axis_buttons_hat(uint8_t const* report, uint16_t len)
+{
+    uint16_t offset = 0;
+    uint8_t lx;
+    uint8_t ly;
+    uint8_t rx;
+    uint8_t ry;
+    uint16_t buttons;
+    uint8_t hat;
+
+    if (len >= 9 && report[0] <= 0x0Fu) {
+        offset = 1;
+    }
+
+    if (len < (uint16_t) (offset + 7)) {
+        return false;
+    }
+
+    lx = report[offset + 0];
+    ly = report[offset + 1];
+    rx = report[offset + 2];
+    ry = report[offset + 3];
+    buttons = read_le16(&report[offset + 4]);
+    hat = report[offset + 6] & 0x0F;
+
+    reset_input_state();
+
+    psx_set_pressed(&g_dev.button_byte2, 6, (buttons & (1u << 0)) != 0);   // CROSS
+    psx_set_pressed(&g_dev.button_byte2, 5, (buttons & (1u << 1)) != 0);   // CIRCLE
+    psx_set_pressed(&g_dev.button_byte2, 7, (buttons & (1u << 2)) != 0);   // SQUARE
+    psx_set_pressed(&g_dev.button_byte2, 4, (buttons & (1u << 3)) != 0);   // TRIANGLE
+    psx_set_pressed(&g_dev.button_byte2, 2, (buttons & (1u << 4)) != 0);   // L1
+    psx_set_pressed(&g_dev.button_byte2, 3, (buttons & (1u << 5)) != 0);   // R1
+    psx_set_pressed(&g_dev.button_byte2, 0, (buttons & (1u << 6)) != 0);   // L2
+    psx_set_pressed(&g_dev.button_byte2, 1, (buttons & (1u << 7)) != 0);   // R2
+    psx_set_pressed(&g_dev.button_byte1, 0, (buttons & (1u << 8)) != 0);   // SELECT
+    psx_set_pressed(&g_dev.button_byte1, 3, (buttons & (1u << 9)) != 0);   // START
+    psx_set_pressed(&g_dev.button_byte1, 1, (buttons & (1u << 10)) != 0);  // L3
+    psx_set_pressed(&g_dev.button_byte1, 2, (buttons & (1u << 11)) != 0);  // R3
+
+    if (hat <= 7u) {
+        set_dpad_from_hat(hat);
+    }
+
+    g_dev.lx = lx;
+    g_dev.ly = ly;
+    g_dev.rx = rx;
+    g_dev.ry = ry;
+    g_dev.has_analog = true;
 
     return true;
 }
@@ -398,7 +609,6 @@ static bool parse_simple_gamepad_report(uint8_t const* report, uint16_t len)
     g_dev.rx = rx;
     g_dev.ry = ry;
     g_dev.has_analog = true;
-    g_dev.type = DEVICE_TYPE_JOYSTICK;
 
     return true;
 }
@@ -427,7 +637,8 @@ void usb_host_input_task(void)
         return;
     }
 
-    tuh_task();
+    // Non-blocking polling keeps PSX timing loop responsive even when no USB events.
+    tuh_task_ext(0, false);
     xinput_receive_report();
 }
 
@@ -470,12 +681,7 @@ bool usb_host_is_device_connected(void)
 
 const char* usb_host_get_device_type(void)
 {
-    switch (g_dev.type) {
-        case DEVICE_TYPE_JOYSTICK: return "Joystick";
-        case DEVICE_TYPE_XINPUT: return "XInput";
-        case DEVICE_TYPE_KEYBOARD: return "Keyboard";
-        default: return "Unknown";
-    }
+    return device_type_to_str(g_dev.type);
 }
 
 // TinyUSB callbacks
@@ -489,69 +695,130 @@ void tuh_unmount_cb(uint8_t daddr)
 {
     if (g_dev.connected && g_dev.addr == daddr) {
         reset_device_state();
+        printf("[USB] device detached\n");
     }
 }
 
 void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const* desc_report, uint16_t desc_len)
 {
+    uint16_t vid;
+    uint16_t pid;
     uint8_t protocol;
+    device_type_t candidate_type;
 
-    g_dev.connected = true;
-    g_dev.addr = dev_addr;
-    g_dev.instance = instance;
-    g_dev.xinput_custom_driver = false;
-    reset_input_state();
+    tuh_vid_pid_get(dev_addr, &vid, &pid);
+    g_dev.vid = vid;
+    g_dev.pid = pid;
 
-    tuh_vid_pid_get(dev_addr, &g_dev.vid, &g_dev.pid);
-
+    // Mounted via custom XInput class driver.
     if (desc_report == NULL && desc_len == 0) {
-        // Mounted via custom XInput class driver.
-        g_dev.type = DEVICE_TYPE_XINPUT;
-        g_dev.hid_protocol = HID_ITF_PROTOCOL_NONE;
-        g_dev.xinput_custom_driver = true;
-        printf("[USB] XInput mounted: VID=%04X PID=%04X\n", g_dev.vid, g_dev.pid);
+        activate_source(dev_addr, instance, DEVICE_TYPE_XINPUT, HID_ITF_PROTOCOL_NONE, true, true);
+        printf("[USB] XInput mounted: inst=%u VID=%04X PID=%04X\n", instance, g_dev.vid, g_dev.pid);
         return;
     }
 
-    protocol = tuh_hid_interface_protocol(dev_addr, instance);
-    g_dev.hid_protocol = protocol;
-
-    if (protocol == HID_ITF_PROTOCOL_KEYBOARD) {
-        g_dev.type = DEVICE_TYPE_KEYBOARD;
-    } else if (g_dev.vid == 0x045E) {
-        g_dev.type = DEVICE_TYPE_XINPUT;
-    } else {
-        g_dev.type = DEVICE_TYPE_JOYSTICK;
+    if (!g_dev.connected || g_dev.addr != dev_addr) {
+        reset_device_state();
+        g_dev.connected = true;
+        g_dev.addr = dev_addr;
+        g_dev.vid = vid;
+        g_dev.pid = pid;
     }
 
-    printf("[USB] HID mounted: type=%s VID=%04X PID=%04X\n",
-           usb_host_get_device_type(), g_dev.vid, g_dev.pid);
+    protocol = tuh_hid_interface_protocol(dev_addr, instance);
+
+    if (instance < CFG_TUH_HID) {
+        g_hid_mounted[instance] = true;
+        g_hid_protocol[instance] = protocol;
+    }
+
+    candidate_type = classify_hid_interface(protocol, g_dev.vid);
+
+    if (candidate_type != DEVICE_TYPE_UNKNOWN) {
+        if (!g_dev.connected || g_dev.addr != dev_addr ||
+            device_type_priority(candidate_type) > device_type_priority(g_dev.type) ||
+            g_dev.instance == instance) {
+            bool changed = (g_dev.addr != dev_addr) || (g_dev.instance != instance) || (g_dev.type != candidate_type);
+            activate_source(dev_addr, instance, candidate_type, protocol, false, changed);
+        }
+    }
+
+    printf("[USB] HID mounted: inst=%u proto=%u candidate=%s active=%s VID=%04X PID=%04X\n",
+           instance,
+           protocol,
+           device_type_to_str(candidate_type),
+           device_type_to_str(g_dev.type),
+           g_dev.vid,
+           g_dev.pid);
 
     if (!tuh_hid_receive_report(dev_addr, instance)) {
-        printf("[USB] failed to arm HID report reception\n");
+        printf("[USB] failed to arm HID report reception (inst=%u)\n", instance);
     }
 }
 
 void tuh_hid_umount_cb(uint8_t dev_addr, uint8_t instance)
 {
-    if (g_dev.connected && g_dev.addr == dev_addr && g_dev.instance == instance) {
+    if (!g_dev.connected || g_dev.addr != dev_addr) {
+        return;
+    }
+
+    if (instance < CFG_TUH_HID) {
+        g_hid_mounted[instance] = false;
+        g_hid_protocol[instance] = HID_ITF_PROTOCOL_NONE;
+    }
+
+    if (g_dev.xinput_custom_driver && g_dev.instance == instance) {
         reset_device_state();
+        return;
+    }
+
+    if (g_dev.instance == instance) {
+        if (!select_best_hid_source(dev_addr)) {
+            reset_device_state();
+        }
     }
 }
 
 void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance, uint8_t const* report, uint16_t len)
 {
     bool parsed = false;
+    bool source_is_active;
+    device_type_t source_type;
+    uint8_t source_protocol = HID_ITF_PROTOCOL_NONE;
 
     if (!g_dev.connected || g_dev.addr != dev_addr) {
         return;
     }
 
-    if (!g_dev.xinput_custom_driver && g_dev.instance != instance) {
-        return;
+    source_is_active = (instance == g_dev.instance);
+
+    if (g_dev.xinput_custom_driver) {
+        source_type = DEVICE_TYPE_XINPUT;
+    } else {
+        if (instance < CFG_TUH_HID && g_hid_mounted[instance]) {
+            source_protocol = g_hid_protocol[instance];
+        } else {
+            source_protocol = tuh_hid_interface_protocol(dev_addr, instance);
+        }
+
+        source_type = classify_hid_interface(source_protocol, g_dev.vid);
+
+        if (source_type == DEVICE_TYPE_UNKNOWN) {
+            goto queue_next;
+        }
+
+        // Only parse inactive interfaces when they have higher priority (e.g., keyboard over joystick).
+        if (!source_is_active && device_type_priority(source_type) <= device_type_priority(g_dev.type)) {
+            goto queue_next;
+        }
+
+        if (!source_is_active) {
+            activate_source(dev_addr, instance, source_type, source_protocol, false, true);
+            source_is_active = true;
+        }
     }
 
-    switch (g_dev.type) {
+    switch (source_type) {
         case DEVICE_TYPE_KEYBOARD:
             if (len >= sizeof(hid_keyboard_report_t)) {
                 parse_keyboard_report((hid_keyboard_report_t const*) report);
@@ -567,27 +834,53 @@ void tuh_hid_report_received_cb(uint8_t dev_addr, uint8_t instance, uint8_t cons
             break;
 
         case DEVICE_TYPE_JOYSTICK:
-            parsed = parse_arduino_joystick_report(report, len);
-            if (!parsed) {
-                parsed = parse_simple_gamepad_report(report, len);
-            }
-            if (!parsed) {
-                parsed = parse_xinput_report(report, len);
+            if (source_is_active) {
+                // Keep explicit VID/PID branching, but avoid auto-detect heuristics.
+                // Leonardo (ArduinoJoystickLibrary) and compatible boards.
+                if (g_dev.vid == 0x2341u || g_dev.vid == 0x2A03u) {
+                    parsed = parse_arduino_joystick_report(report, len);
+                    if (!parsed) {
+                        parsed = parse_simple_gamepad_axis_first(report, len);
+                    }
+                    if (!parsed) {
+                        parsed = parse_simple_gamepad_report(report, len);
+                    }
+                }
+                // Specific non-Leonardo profile observed in testing.
+                else if (g_dev.vid == 0x0925u && g_dev.pid == 0x8888u) {
+                    parsed = parse_simple_gamepad_axis_buttons_hat(report, len);
+                    if (!parsed) {
+                        parsed = parse_simple_gamepad_axis_first(report, len);
+                    }
+                    if (!parsed) {
+                        parsed = parse_simple_gamepad_report(report, len);
+                    }
+                }
+                // Generic HID joystick fallback order.
+                else {
+                    parsed = parse_simple_gamepad_axis_first(report, len);
+                    if (!parsed) {
+                        parsed = parse_simple_gamepad_report(report, len);
+                    }
+                    if (!parsed) {
+                        parsed = parse_xinput_report(report, len);
+                    }
+                }
             }
             break;
 
         default:
-            parsed = parse_simple_gamepad_report(report, len);
             break;
     }
 
-    if (!parsed && len >= 14) {
+    if (!parsed && source_type == DEVICE_TYPE_XINPUT && len >= 14) {
         (void) parse_xinput_report(report, len);
     }
 
+queue_next:
     if (!g_dev.xinput_custom_driver) {
         if (!tuh_hid_receive_report(dev_addr, instance)) {
-            printf("[USB] failed to queue next HID report\n");
+            printf("[USB] failed to queue next HID report (inst=%u)\n", instance);
         }
     }
 }
