@@ -25,11 +25,57 @@
 // PSX/PS2 Bus Signal Pin Definitions
 // ============================================================================
 
-#define PIN_DAT 3  // Data line (Open-drain, bidirectional)
-#define PIN_CMD 4  // Command line (Input from PSX)
-#define PIN_SEL 10 // Select/Chip Select (Input from PSX, Active LOW)
-#define PIN_CLK 6  // Clock (Input from PSX, ~250kHz)
-#define PIN_ACK 7  // Acknowledge (Open-drain output to PSX)
+#define PIN_P1_DAT 6 // P1 Data line (Open-drain, bidirectional)
+#define PIN_P1_CMD 5 // P1 Command line (Input from PSX)
+#define PIN_P1_SEL 4 // P1 Select/Chip Select (Input from PSX, Active LOW)
+#define PIN_P1_CLK 3 // P1 Clock (Input from PSX, ~250kHz)
+#define PIN_P1_ACK 2 // P1 Acknowledge (Open-drain output to PSX)
+
+#define PIN_P2_DAT 16 // P2 Data line (Open-drain, bidirectional)
+#define PIN_P2_CMD 17 // P2 Command line (Input from PSX)
+#define PIN_P2_SEL 18 // P2 Select/Chip Select (Input from PSX, Active LOW)
+#define PIN_P2_CLK 19 // P2 Clock (Input from PSX, ~250kHz)
+#define PIN_P2_ACK 20 // P2 Acknowledge (Open-drain output to PSX)
+
+// ============================================================================
+// DDR Pad Button Mapping
+// B0-B3 are P1 panel inputs, B4-B7 are P2 panel inputs.
+// Change these indices to remap the physical button positions.
+// ============================================================================
+
+#define DDR_PAD_P1_UP    0  // USB button bit index for P1 UP panel
+#define DDR_PAD_P1_DOWN  1  // USB button bit index for P1 DOWN panel
+#define DDR_PAD_P1_LEFT  2  // USB button bit index for P1 LEFT panel
+#define DDR_PAD_P1_RIGHT 3  // USB button bit index for P1 RIGHT panel
+
+#define DDR_PAD_P2_UP    4  // USB button bit index for P2 UP panel
+#define DDR_PAD_P2_DOWN  5  // USB button bit index for P2 DOWN panel
+#define DDR_PAD_P2_LEFT  6  // USB button bit index for P2 LEFT panel
+#define DDR_PAD_P2_RIGHT 7  // USB button bit index for P2 RIGHT panel
+
+// ============================================================================
+// P1 GPIO Direct Input Pin Definitions
+// Each pin is active LOW (internal pull-up, button connects to GND).
+// PSX byte1: SELECT(0), L3(1), R3(2), START(3), UP(4), RIGHT(5), DOWN(6), LEFT(7)
+// PSX byte2: L2(0), R2(1), L1(2), R1(3), TRIANGLE(4), CIRCLE(5), CROSS(6), SQUARE(7)
+// ============================================================================
+
+#define GPIO_BTN_SELECT   7
+#define GPIO_BTN_START    8
+#define GPIO_BTN_UP       9
+#define GPIO_BTN_DOWN     10
+#define GPIO_BTN_LEFT     11
+#define GPIO_BTN_RIGHT    12
+#define GPIO_BTN_CROSS    13
+#define GPIO_BTN_CIRCLE   14
+#define GPIO_BTN_TRIANGLE 15
+#define GPIO_BTN_SQUARE   21
+#define GPIO_BTN_L1       22
+#define GPIO_BTN_R1       26  // A0
+#define GPIO_BTN_L2       27  // A1
+#define GPIO_BTN_R2       28  // A2
+
+#define GPIO_BTN_COUNT 14
 
 // ============================================================================
 // Status LED

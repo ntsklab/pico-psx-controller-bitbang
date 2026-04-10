@@ -27,7 +27,26 @@
 // Protocol State and Statistics
 // ============================================================================
 
-static volatile bool transaction_active = false;
+typedef struct
+{
+    uint8_t port_id;
+    psx_bus_pins_t bus;
+    volatile bool transaction_active;
+} psx_controller_t;
+
+static psx_controller_t g_controllers[2] = {
+    {
+        .port_id = 0u,
+        .bus = { PIN_P1_DAT, PIN_P1_CMD, PIN_P1_SEL, PIN_P1_CLK, PIN_P1_ACK },
+        .transaction_active = false,
+    },
+    {
+        .port_id = 1u,
+        .bus = { PIN_P2_DAT, PIN_P2_CMD, PIN_P2_SEL, PIN_P2_CLK, PIN_P2_ACK },
+        .transaction_active = false,
+    },
+};
+static volatile psx_controller_t* g_active_controller = NULL;
 static psx_stats_t stats = {0};
 static uint32_t last_transaction_time = 0;
 static uint64_t total_interval_sum = 0;
@@ -37,7 +56,7 @@ static uint64_t interval_count = 0;
 // Forward Declarations
 // ============================================================================
 
-static bool handle_poll_command(uint8_t btn1, uint8_t btn2);
+static bool handle_poll_command(psx_controller_t* controller, uint8_t btn1, uint8_t btn2);
 
 // ============================================================================
 // Initialization
@@ -46,16 +65,21 @@ static bool handle_poll_command(uint8_t btn1, uint8_t btn2);
 void psx_protocol_init(void)
 {
     // Initialize bit-banging layer
+    psx_bitbang_set_active_bus(&g_controllers[0].bus);
     psx_bitbang_init();
+    psx_bitbang_init_bus(&g_controllers[1].bus);
 
     // Set up SELECT interrupt for rising edge (transaction end/abort)
-    gpio_set_irq_enabled_with_callback(PIN_SEL, GPIO_IRQ_EDGE_RISE, true,
+    gpio_set_irq_enabled_with_callback(g_controllers[0].bus.sel, GPIO_IRQ_EDGE_RISE, true,
                                        &psx_sel_interrupt_handler);
+    gpio_set_irq_enabled(g_controllers[1].bus.sel, GPIO_IRQ_EDGE_RISE, true);
 
     // Reset statistics
     psx_reset_stats();
 
-    transaction_active = false;
+    g_controllers[0].transaction_active = false;
+    g_controllers[1].transaction_active = false;
+    g_active_controller = NULL;
 }
 
 // ============================================================================
@@ -64,14 +88,36 @@ void psx_protocol_init(void)
 
 void __time_critical_func(psx_sel_interrupt_handler)(unsigned int gpio_num, uint32_t events)
 {
+    (void) events;
+    psx_controller_t* matched = NULL;
+
     // Acknowledge interrupt
-    gpio_acknowledge_irq(PIN_SEL, GPIO_IRQ_EDGE_RISE);
+    gpio_acknowledge_irq(gpio_num, GPIO_IRQ_EDGE_RISE);
+
+    for (uint8_t i = 0; i < 2; i++)
+    {
+        if (gpio_num == g_controllers[i].bus.sel)
+        {
+            matched = &g_controllers[i];
+            break;
+        }
+    }
+
+    if (matched == NULL)
+    {
+        return;
+    }
+
+    if (matched != g_active_controller)
+    {
+        return;
+    }
 
     // Immediately release bus on SELECT rising edge
     psx_release_bus();
 
     // Mark transaction as inactive
-    transaction_active = false;
+    matched->transaction_active = false;
 }
 
 // ============================================================================
@@ -82,11 +128,17 @@ void psx_protocol_task(void)
 {
     while (1)
     {
-        // Wait for SELECT to go LOW (transaction start)
-        while (psx_read_sel())
+        psx_controller_t* controller;
+
+        // Wait for either SELECT to go LOW (transaction start)
+        while (psx_read_sel_bus(&g_controllers[0].bus) && psx_read_sel_bus(&g_controllers[1].bus))
         {
             tight_loop_contents();
         }
+
+        controller = psx_read_sel_bus(&g_controllers[0].bus) ? &g_controllers[1] : &g_controllers[0];
+        psx_bitbang_set_active_bus(&controller->bus);
+        g_active_controller = controller;
 
         // Small delay to ensure SELECT is stable
         busy_wait_us_32(1);
@@ -98,15 +150,17 @@ void psx_protocol_task(void)
         }
 
         // Mark transaction as active
-        transaction_active = true;
+        controller->transaction_active = true;
 
         // Receive first byte (device address) - don't send anything yet, keep DAT Hi-Z
         uint8_t addr = psx_receive_byte();
 
         // Check if transaction was aborted
-        if (!transaction_active || psx_read_sel())
+        if (!controller->transaction_active || psx_read_sel())
         {
             psx_release_bus();
+            controller->transaction_active = false;
+            g_active_controller = NULL;
             continue;
         }
 
@@ -124,13 +178,14 @@ void psx_protocol_task(void)
             // IMPORTANT: Wait for the entire memory card transaction to complete
             // SEL will stay LOW during the full memory card communication
             // We must wait until SEL goes HIGH before starting to listen for next transaction
-            while (!psx_read_sel() && transaction_active)
+            while (!psx_read_sel() && controller->transaction_active)
             {
                 tight_loop_contents();
             }
 
             // Transaction ended
-            transaction_active = false;
+            controller->transaction_active = false;
+            g_active_controller = NULL;
 
             // Skip all further processing for this transaction
             continue;
@@ -143,15 +198,15 @@ void psx_protocol_task(void)
             stats.controller_transactions++;
 
             // Ensure DAT is Hi-Z before ACK
-            gpio_set_dir(PIN_DAT, GPIO_IN);
+            psx_dat_hiz();
 
             // Send ACK after receiving address byte immediately (no debug output here - timing critical!)
             // Disable SEL interrupt temporarily to avoid false abort during ACK pulse
-            gpio_set_irq_enabled(PIN_SEL, GPIO_IRQ_EDGE_RISE, false);
+            gpio_set_irq_enabled(controller->bus.sel, GPIO_IRQ_EDGE_RISE, false);
             psx_send_ack();
             // Clear any pending interrupts before re-enabling
-            gpio_acknowledge_irq(PIN_SEL, GPIO_IRQ_EDGE_RISE);
-            gpio_set_irq_enabled(PIN_SEL, GPIO_IRQ_EDGE_RISE, true);
+            gpio_acknowledge_irq(controller->bus.sel, GPIO_IRQ_EDGE_RISE);
+            gpio_set_irq_enabled(controller->bus.sel, GPIO_IRQ_EDGE_RISE, true);
 
             // Check if SEL went HIGH during ACK
             if (psx_read_sel())
@@ -183,13 +238,15 @@ void psx_protocol_task(void)
 #endif
 
             // Disable SEL interrupt briefly - no debug output here, timing critical!
-            gpio_set_irq_enabled(PIN_SEL, GPIO_IRQ_EDGE_RISE, false);
+            gpio_set_irq_enabled(controller->bus.sel, GPIO_IRQ_EDGE_RISE, false);
 
             if (cmd == 0xFF)
             {
                 // transfer_byte returned 0xFF = timeout or abort during transfer
                 psx_release_bus();
-                gpio_set_irq_enabled(PIN_SEL, GPIO_IRQ_EDGE_RISE, true);
+                gpio_set_irq_enabled(controller->bus.sel, GPIO_IRQ_EDGE_RISE, true);
+                controller->transaction_active = false;
+                g_active_controller = NULL;
                 continue;
             }
 
@@ -197,16 +254,20 @@ void psx_protocol_task(void)
             if (psx_read_sel())
             {
                 psx_release_bus();
-                gpio_set_irq_enabled(PIN_SEL, GPIO_IRQ_EDGE_RISE, true);
+                gpio_set_irq_enabled(controller->bus.sel, GPIO_IRQ_EDGE_RISE, true);
+                controller->transaction_active = false;
+                g_active_controller = NULL;
                 continue;
             }
 
             // SEL is still LOW - safe to proceed, now re-enable interrupt
-            gpio_set_irq_enabled(PIN_SEL, GPIO_IRQ_EDGE_RISE, true);
+            gpio_set_irq_enabled(controller->bus.sel, GPIO_IRQ_EDGE_RISE, true);
 
-            if (!transaction_active || psx_read_sel())
+            if (!controller->transaction_active || psx_read_sel())
             {
                 psx_release_bus();
+                controller->transaction_active = false;
+                g_active_controller = NULL;
                 continue;
             }
 
@@ -238,11 +299,11 @@ void psx_protocol_task(void)
 
                 // Read current button state from shared memory
                 uint8_t btn1, btn2;
-                extern void shared_state_read(uint8_t *btn1, uint8_t *btn2);
-                shared_state_read(&btn1, &btn2);
+                extern void shared_state_read(uint8_t port, uint8_t *btn1, uint8_t *btn2);
+                shared_state_read(controller->port_id, &btn1, &btn2);
 
                 // Process poll command (0x42) - only command we support
-                bool success = handle_poll_command(btn1, btn2);
+                bool success = handle_poll_command(controller, btn1, btn2);
                 (void)success; // Suppress unused variable warning
             }
             else
@@ -289,7 +350,8 @@ void psx_protocol_task(void)
 
         // Ensure bus is released at end of transaction
         psx_release_bus();
-        transaction_active = false;
+        controller->transaction_active = false;
+        g_active_controller = NULL;
     }
 }
 
@@ -297,7 +359,7 @@ void psx_protocol_task(void)
 // Command Handlers
 // ============================================================================
 
-static bool __time_critical_func(handle_poll_command)(uint8_t btn1, uint8_t btn2)
+static bool __time_critical_func(handle_poll_command)(psx_controller_t* controller, uint8_t btn1, uint8_t btn2)
 {
     // Poll command sequence:
     // PSX -> Controller:  0x01  0x42  0x00  0x00  0x00
@@ -307,40 +369,40 @@ static bool __time_critical_func(handle_poll_command)(uint8_t btn1, uint8_t btn2
     // Send ACK after ID_LO
     psx_send_ack();
 
-    if (!transaction_active || psx_read_sel())
+    if (!controller->transaction_active || psx_read_sel())
     {
         return false;
     }
 
     // Transfer: receive 0x00, send ID_HI (0x5A)
     uint8_t dummy1 = psx_transfer_byte(PSX_ID_DIGITAL_HI);
-    if (!transaction_active || psx_read_sel())
+    if (!controller->transaction_active || psx_read_sel())
     {
         return false;
     }
 
     psx_send_ack();
-    if (!transaction_active || psx_read_sel())
+    if (!controller->transaction_active || psx_read_sel())
     {
         return false;
     }
 
     // Transfer: receive 0x00, send button data byte 1
     uint8_t dummy2 = psx_transfer_byte(btn1);
-    if (!transaction_active || psx_read_sel())
+    if (!controller->transaction_active || psx_read_sel())
     {
         return false;
     }
     psx_send_ack();
 
-    if (!transaction_active || psx_read_sel())
+    if (!controller->transaction_active || psx_read_sel())
     {
         return false;
     }
 
     // Transfer: receive 0x00, send button data byte 2
     uint8_t dummy3 = psx_transfer_byte(btn2);
-    if (!transaction_active || psx_read_sel())
+    if (!controller->transaction_active || psx_read_sel())
     {
         return false;
     }

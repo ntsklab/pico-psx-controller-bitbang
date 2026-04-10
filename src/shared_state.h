@@ -41,10 +41,12 @@ typedef struct
 } shared_controller_state_t;
 
 // ============================================================================
-// Global Shared State
+// Global Shared State (indexed by port: 0 = P1, 1 = P2)
 // ============================================================================
 
-extern shared_controller_state_t g_shared_state;
+#define SHARED_STATE_NUM_PORTS 2
+
+extern shared_controller_state_t g_shared_state[SHARED_STATE_NUM_PORTS];
 
 // ============================================================================
 // Function Prototypes
@@ -53,10 +55,10 @@ extern shared_controller_state_t g_shared_state;
 // Initialize shared state
 void shared_state_init(void);
 
-// Core 0: Write new button state
-void shared_state_write(uint8_t btn1, uint8_t btn2);
+// Core 0: Write new button state for the specified port (0=P1, 1=P2)
+void shared_state_write(uint8_t port, uint8_t btn1, uint8_t btn2);
 
-// Core 1: Read stable button state
-void shared_state_read(uint8_t *btn1, uint8_t *btn2);
+// Core 1: Read stable button state for the specified port (0=P1, 1=P2)
+void shared_state_read(uint8_t port, uint8_t *btn1, uint8_t *btn2);
 
 #endif // SHARED_STATE_H

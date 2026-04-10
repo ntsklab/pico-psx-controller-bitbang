@@ -23,12 +23,30 @@
 #include <stdbool.h>
 #include "config.h"
 
+typedef struct
+{
+	uint8_t dat;
+	uint8_t cmd;
+	uint8_t sel;
+	uint8_t clk;
+	uint8_t ack;
+} psx_bus_pins_t;
+
 // ============================================================================
 // PSX Bit-Banging Low-Level Functions
 // ============================================================================
 
 // Initialize PSX bus GPIO pins
 void psx_bitbang_init(void);
+
+// Initialize GPIO direction/pulls for a specific bus pin set.
+void psx_bitbang_init_bus(psx_bus_pins_t const* pins);
+
+// Select active bus pin set for subsequent transfer functions.
+void psx_bitbang_set_active_bus(psx_bus_pins_t const* pins);
+
+// Read SELECT for the specified bus (without switching active bus).
+bool psx_read_sel_bus(psx_bus_pins_t const* pins);
 
 // Open-drain control functions for DAT and ACK lines
 // Hi-Z state: set pin to input mode (pulled HIGH by external resistor)

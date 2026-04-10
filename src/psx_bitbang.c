@@ -25,6 +25,32 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+static psx_bus_pins_t g_active_bus = {
+    .dat = PIN_P1_DAT,
+    .cmd = PIN_P1_CMD,
+    .sel = PIN_P1_SEL,
+    .clk = PIN_P1_CLK,
+    .ack = PIN_P1_ACK,
+};
+
+void psx_bitbang_set_active_bus(psx_bus_pins_t const* pins)
+{
+    if (pins == NULL)
+    {
+        return;
+    }
+    g_active_bus = *pins;
+}
+
+bool psx_read_sel_bus(psx_bus_pins_t const* pins)
+{
+    if (pins == NULL)
+    {
+        return true;
+    }
+    return gpio_get(pins->sel);
+}
+
 // ============================================================================
 // ACK Auto-Tuning State
 // ============================================================================
@@ -263,43 +289,48 @@ inline void gpio_hi_z(uint gpio)
 
 void psx_bitbang_init(void)
 {
+    psx_bitbang_init_bus(&g_active_bus);
+}
+
+void psx_bitbang_init_bus(psx_bus_pins_t const* pins)
+{
+    if (pins == NULL)
+    {
+        return;
+    }
+
     // CRITICAL: Ensure GPIO function is set to SIO (GPIO mode) BEFORE using gpio_init
     // This prevents conflicts with UART or other peripherals
-    gpio_set_function(PIN_DAT, GPIO_FUNC_SIO);
-    gpio_set_function(PIN_ACK, GPIO_FUNC_SIO);
-    gpio_set_function(PIN_CMD, GPIO_FUNC_SIO);
-    gpio_set_function(PIN_CLK, GPIO_FUNC_SIO);
-    gpio_set_function(PIN_SEL, GPIO_FUNC_SIO);
+    gpio_set_function(pins->dat, GPIO_FUNC_SIO);
+    gpio_set_function(pins->ack, GPIO_FUNC_SIO);
+    gpio_set_function(pins->cmd, GPIO_FUNC_SIO);
+    gpio_set_function(pins->clk, GPIO_FUNC_SIO);
+    gpio_set_function(pins->sel, GPIO_FUNC_SIO);
 
     // Initialize DAT pin (open-drain, bidirectional)
-    gpio_init(PIN_DAT);
-    gpio_put(PIN_DAT, 0);           // Set output register to LOW FIRST
-    gpio_disable_pulls(PIN_DAT);    // NO internal pull-up - rely on external pull-up
-    gpio_set_dir(PIN_DAT, GPIO_IN); // Start in Hi-Z state
+    gpio_init(pins->dat);
+    gpio_put(pins->dat, 0);
+    gpio_disable_pulls(pins->dat);
+    gpio_set_dir(pins->dat, GPIO_IN);
 
     // Initialize ACK pin (open-drain output)
-    // CRITICAL: ACK must NOT have internal pull-up!
-    // The PSX has external pull-up on the bus.
-    // Internal pull-up may prevent ACK from going LOW.
-    gpio_init(PIN_ACK);
-    gpio_put(PIN_ACK, 0);           // Set output register to LOW FIRST
-    gpio_disable_pulls(PIN_ACK);    // NO internal pull-up - PSX has external pull-up
-    gpio_set_dir(PIN_ACK, GPIO_IN); // Start in Hi-Z state
+    gpio_init(pins->ack);
+    gpio_put(pins->ack, 0);
+    gpio_disable_pulls(pins->ack);
+    gpio_set_dir(pins->ack, GPIO_IN);
 
-    // Initialize CMD pin (input from PSX)
-    gpio_init(PIN_CMD);
-    gpio_disable_pulls(PIN_CMD); // No pull - PSX has external pull-up
-    gpio_set_dir(PIN_CMD, GPIO_IN);
+    // Inputs from PSX
+    gpio_init(pins->cmd);
+    gpio_disable_pulls(pins->cmd);
+    gpio_set_dir(pins->cmd, GPIO_IN);
 
-    // Initialize CLK pin (input from PSX)
-    gpio_init(PIN_CLK);
-    gpio_disable_pulls(PIN_CLK); // No pull - PSX drives this line
-    gpio_set_dir(PIN_CLK, GPIO_IN);
+    gpio_init(pins->clk);
+    gpio_disable_pulls(pins->clk);
+    gpio_set_dir(pins->clk, GPIO_IN);
 
-    // Initialize SEL pin (input from PSX, active LOW)
-    gpio_init(PIN_SEL);
-    gpio_disable_pulls(PIN_SEL); // No pull - PSX drives this line
-    gpio_set_dir(PIN_SEL, GPIO_IN);
+    gpio_init(pins->sel);
+    gpio_disable_pulls(pins->sel);
+    gpio_set_dir(pins->sel, GPIO_IN);
 }
 
 // ============================================================================
@@ -308,22 +339,22 @@ void psx_bitbang_init(void)
 
 inline void psx_dat_hiz(void)
 {
-    gpio_set_dir(PIN_DAT, GPIO_IN); // Hi-Z (pulled HIGH externally)
+    gpio_set_dir(g_active_bus.dat, GPIO_IN); // Hi-Z (pulled HIGH externally)
 }
 
 inline void psx_dat_low(void)
 {
-    gpio_set_dir(PIN_DAT, GPIO_OUT); // Drive LOW
+    gpio_set_dir(g_active_bus.dat, GPIO_OUT); // Drive LOW
 }
 
 inline void psx_ack_hiz(void)
 {
-    gpio_set_dir(PIN_ACK, GPIO_IN); // Hi-Z (pulled HIGH externally)
+    gpio_set_dir(g_active_bus.ack, GPIO_IN); // Hi-Z (pulled HIGH externally)
 }
 
 inline void psx_ack_low(void)
 {
-    gpio_set_dir(PIN_ACK, GPIO_OUT); // Drive LOW
+    gpio_set_dir(g_active_bus.ack, GPIO_OUT); // Drive LOW
 }
 
 // ============================================================================
@@ -332,17 +363,17 @@ inline void psx_ack_low(void)
 
 inline bool psx_read_sel(void)
 {
-    return gpio_get(PIN_SEL);
+    return gpio_get(g_active_bus.sel);
 }
 
 inline bool psx_read_clk(void)
 {
-    return gpio_get(PIN_CLK);
+    return gpio_get(g_active_bus.clk);
 }
 
 inline bool psx_read_cmd(void)
 {
-    return gpio_get(PIN_CMD);
+    return gpio_get(g_active_bus.cmd);
 }
 
 // ============================================================================
@@ -354,7 +385,7 @@ bool __time_critical_func(psx_wait_clk_rising)(uint32_t timeout_us)
     uint32_t start = time_us_32();
 
     // Wait for CLK to go HIGH
-    while (!gpio_get(PIN_CLK))
+    while (!gpio_get(g_active_bus.clk))
     {
         // Check for timeout
         if ((time_us_32() - start) > timeout_us)
@@ -362,7 +393,7 @@ bool __time_critical_func(psx_wait_clk_rising)(uint32_t timeout_us)
             return false;
         }
         // Check if SELECT went HIGH (transaction aborted)
-        if (gpio_get(PIN_SEL))
+        if (gpio_get(g_active_bus.sel))
         {
             return false;
         }
@@ -376,7 +407,7 @@ bool __time_critical_func(psx_wait_clk_falling)(uint32_t timeout_us)
     uint32_t start = time_us_32();
 
     // Wait for CLK to go LOW
-    while (gpio_get(PIN_CLK))
+    while (gpio_get(g_active_bus.clk))
     {
         // Check for timeout
         if ((time_us_32() - start) > timeout_us)
@@ -384,7 +415,7 @@ bool __time_critical_func(psx_wait_clk_falling)(uint32_t timeout_us)
             return false;
         }
         // Check if SELECT went HIGH (transaction aborted)
-        if (gpio_get(PIN_SEL))
+        if (gpio_get(g_active_bus.sel))
         {
             return false;
         }
@@ -417,7 +448,7 @@ uint8_t __time_critical_func(psx_receive_byte)(void)
         }
 
         // Sample CMD line on rising edge
-        if (gpio_get(PIN_CMD))
+        if (gpio_get(g_active_bus.cmd))
         {
             data |= (1 << bit);
         }
@@ -435,31 +466,31 @@ bool __time_critical_func(psx_send_byte)(uint8_t data)
         if (!psx_wait_clk_falling(PSX_CLK_TIMEOUT_US))
         {
             // Ensure DAT is Hi-Z before returning
-            gpio_set_dir(PIN_DAT, GPIO_IN);
+            gpio_set_dir(g_active_bus.dat, GPIO_IN);
             return false; // Timeout or abort
         }
 
         // Set DAT line according to current bit immediately after falling edge
         if (data & (1 << bit))
         {
-            gpio_set_dir(PIN_DAT, GPIO_IN); // Hi-Z = 1
+            gpio_set_dir(g_active_bus.dat, GPIO_IN); // Hi-Z = 1
         }
         else
         {
-            gpio_set_dir(PIN_DAT, GPIO_OUT); // LOW = 0
+            gpio_set_dir(g_active_bus.dat, GPIO_OUT); // LOW = 0
         }
 
         // Wait for CLK rising edge (PSX samples data)
         if (!psx_wait_clk_rising(PSX_CLK_TIMEOUT_US))
         {
             // Ensure DAT is Hi-Z before returning
-            gpio_set_dir(PIN_DAT, GPIO_IN);
+            gpio_set_dir(g_active_bus.dat, GPIO_IN);
             return false; // Timeout or abort
         }
     }
 
     // After byte is sent, ensure DAT returns to Hi-Z (idle state)
-    gpio_set_dir(PIN_DAT, GPIO_IN);
+    gpio_set_dir(g_active_bus.dat, GPIO_IN);
 
     return true;
 }
@@ -479,23 +510,23 @@ uint8_t __time_critical_func(psx_transfer_byte)(uint8_t data_out)
         }
 
         // Sample input data on CMD line immediately after falling edge
-        bool cmd_bit = gpio_get(PIN_CMD);
+        bool cmd_bit = gpio_get(g_active_bus.cmd);
 
         // Output data on DAT line
         if (data_out & (1 << bit))
         {
-            gpio_set_dir(PIN_DAT, GPIO_IN); // Hi-Z = 1
+            gpio_set_dir(g_active_bus.dat, GPIO_IN); // Hi-Z = 1
         }
         else
         {
-            gpio_set_dir(PIN_DAT, GPIO_OUT); // LOW = 0
+            gpio_set_dir(g_active_bus.dat, GPIO_OUT); // LOW = 0
         }
 
         // Wait for CLK rising edge
         if (!psx_wait_clk_rising(PSX_CLK_TIMEOUT_US))
         {
             // Ensure DAT is Hi-Z before returning
-            gpio_set_dir(PIN_DAT, GPIO_IN);
+            gpio_set_dir(g_active_bus.dat, GPIO_IN);
             return 0xFF; // Timeout or abort
         }
 
@@ -507,7 +538,7 @@ uint8_t __time_critical_func(psx_transfer_byte)(uint8_t data_out)
     }
 
     // After byte is transferred, ensure DAT returns to Hi-Z (idle state)
-    gpio_set_dir(PIN_DAT, GPIO_IN);
+    gpio_set_dir(g_active_bus.dat, GPIO_IN);
 
     return data_in;
 }
@@ -521,7 +552,7 @@ void __time_critical_func(psx_send_ack)(void)
     busy_wait_us_32(ACK_PULSE_WIDTH_US);
 #endif
     // Assert ACK (drive LOW) immediately after byte transfer
-    gpio_out_low(PIN_ACK);
+    gpio_out_low(g_active_bus.ack);
 
     // Hold ACK for specified duration (auto-tuned or fixed)
 #if ACK_AUTO_TUNE_ENABLED
@@ -531,7 +562,7 @@ void __time_critical_func(psx_send_ack)(void)
 #endif
 
     // Release ACK (Hi-Z)
-    gpio_hi_z(PIN_ACK);
+    gpio_hi_z(g_active_bus.ack);
 }
 
 // ============================================================================
@@ -541,6 +572,6 @@ void __time_critical_func(psx_send_ack)(void)
 inline void psx_release_bus(void)
 {
     // Release both DAT and ACK to Hi-Z
-    gpio_set_dir(PIN_DAT, GPIO_IN);
-    gpio_set_dir(PIN_ACK, GPIO_IN);
+    gpio_set_dir(g_active_bus.dat, GPIO_IN);
+    gpio_set_dir(g_active_bus.ack, GPIO_IN);
 }

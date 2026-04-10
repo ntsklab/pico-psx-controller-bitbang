@@ -39,6 +39,9 @@ void usb_host_input_task(void);
 // Byte 2: L2(0), R2(1), L1(2), R1(3), TRIANGLE(4), CIRCLE(5), CROSS(6), SQUARE(7)
 void usb_host_get_button_state(uint8_t *byte1, uint8_t *byte2);
 
+// Get P2 button state (DDR P2 panel mapping)
+void usb_host_get_p2_button_state(uint8_t *byte1, uint8_t *byte2);
+
 // Get analog stick positions (if supported by device)
 // Returns true if analog data is available
 bool usb_host_get_analog_state(uint8_t *lx, uint8_t *ly, uint8_t *rx, uint8_t *ry);

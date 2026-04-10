@@ -25,11 +25,11 @@
 // Global Shared State
 // ============================================================================
 
-shared_controller_state_t g_shared_state;
+shared_controller_state_t g_shared_state[SHARED_STATE_NUM_PORTS];
 
-// Latching mode: Store accumulated button presses (used when latching_mode is ON)
-static uint8_t latched_btn1 = 0xFF;
-static uint8_t latched_btn2 = 0xFF;
+// Latching mode: per-port latched button state
+static uint8_t latched_btn1[SHARED_STATE_NUM_PORTS] = { 0xFF, 0xFF };
+static uint8_t latched_btn2[SHARED_STATE_NUM_PORTS] = { 0xFF, 0xFF };
 
 // External runtime configuration
 extern bool latching_mode;
@@ -40,67 +40,59 @@ extern bool latching_mode;
 
 void shared_state_init(void)
 {
-    // Initialize both buffers with idle state (all buttons released = 0xFF)
-    for (int i = 0; i < 2; i++)
+    for (uint8_t port = 0; port < SHARED_STATE_NUM_PORTS; port++)
     {
-        g_shared_state.buffer[i].buttons1 = 0xFF;
-        g_shared_state.buffer[i].buttons2 = 0xFF;
+        for (int i = 0; i < 2; i++)
+        {
+            g_shared_state[port].buffer[i].buttons1 = 0xFF;
+            g_shared_state[port].buffer[i].buttons2 = 0xFF;
+        }
+        g_shared_state[port].write_index = 0;
+        g_shared_state[port].read_index = 0;
+        latched_btn1[port] = 0xFF;
+        latched_btn2[port] = 0xFF;
     }
-
-    // Initialize indices
-    g_shared_state.write_index = 0;
-    g_shared_state.read_index = 0;
 }
 
-void shared_state_write(uint8_t btn1, uint8_t btn2)
+void shared_state_write(uint8_t port, uint8_t btn1, uint8_t btn2)
 {
-    uint32_t write_idx = 1 - g_shared_state.read_index;
-    
+    if (port >= SHARED_STATE_NUM_PORTS) return;
+    shared_controller_state_t* s = &g_shared_state[port];
+    uint32_t write_idx = 1 - s->read_index;
+
     if (latching_mode)
     {
-        // Latching mode: Accumulate button presses (0 = pressed)
-        // Once a button is pressed (bit = 0), keep it pressed until PSX reads it
-        latched_btn1 &= btn1; // Bitwise AND - keeps 0s (pressed buttons)
-        latched_btn2 &= btn2;
-
-        // Write latched state to buffer
-        g_shared_state.buffer[write_idx].buttons1 = latched_btn1;
-        g_shared_state.buffer[write_idx].buttons2 = latched_btn2;
+        latched_btn1[port] &= btn1;
+        latched_btn2[port] &= btn2;
+        s->buffer[write_idx].buttons1 = latched_btn1[port];
+        s->buffer[write_idx].buttons2 = latched_btn2[port];
     }
     else
     {
-        // Direct mode: Write current button state directly
-        g_shared_state.buffer[write_idx].buttons1 = btn1;
-        g_shared_state.buffer[write_idx].buttons2 = btn2;
+        s->buffer[write_idx].buttons1 = btn1;
+        s->buffer[write_idx].buttons2 = btn2;
     }
 
-    // Memory barrier to ensure writes complete before index update
     __dmb();
-
-    // Switch to new buffer
-    g_shared_state.write_index = write_idx;
+    s->write_index = write_idx;
 }
 
-void shared_state_read(uint8_t *btn1, uint8_t *btn2)
+void shared_state_read(uint8_t port, uint8_t *btn1, uint8_t *btn2)
 {
-    // Read from the latest complete buffer
-    uint32_t read_idx = g_shared_state.write_index;
+    if (port >= SHARED_STATE_NUM_PORTS) { *btn1 = 0xFF; *btn2 = 0xFF; return; }
+    shared_controller_state_t* s = &g_shared_state[port];
 
-    // Update read index
-    g_shared_state.read_index = read_idx;
-
-    // Memory barrier to ensure index is read before data
+    uint32_t read_idx = s->write_index;
+    s->read_index = read_idx;
     __dmb();
 
-    // Read button state
-    *btn1 = g_shared_state.buffer[read_idx].buttons1;
-    *btn2 = g_shared_state.buffer[read_idx].buttons2;
+    *btn1 = s->buffer[read_idx].buttons1;
+    *btn2 = s->buffer[read_idx].buttons2;
 
     if (latching_mode)
     {
-        // Clear latched state after PSX reads it
-        latched_btn1 = 0xFF;
-        latched_btn2 = 0xFF;
+        latched_btn1[port] = 0xFF;
+        latched_btn2[port] = 0xFF;
     }
 
 #if SOCD_CLEANER_ENABLED

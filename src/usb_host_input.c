@@ -13,6 +13,7 @@
 #include <string.h>
 
 #include "pico/stdlib.h"
+#include "config.h"
 #include "usb_host_input.h"
 #include "xinput_host_driver.h"
 
@@ -43,6 +44,10 @@ typedef struct {
 
     uint8_t button_byte1;
     uint8_t button_byte2;
+
+    // P2 button state (used for DDR P2 panel mapping)
+    uint8_t p2_button_byte1;
+    uint8_t p2_button_byte2;
 
     uint8_t lx;
     uint8_t ly;
@@ -177,6 +182,8 @@ static void reset_input_state(void)
 {
     g_dev.button_byte1 = 0xFF;
     g_dev.button_byte2 = 0xFF;
+    g_dev.p2_button_byte1 = 0xFF;
+    g_dev.p2_button_byte2 = 0xFF;
     g_dev.lx = 0x80;
     g_dev.ly = 0x80;
     g_dev.rx = 0x80;
@@ -449,33 +456,19 @@ static bool parse_arduino_joystick_report(uint8_t const* report, uint16_t len)
 
     reset_input_state();
 
-    psx_set_pressed(&g_dev.button_byte2, 6, (buttons & (1u << 0)) != 0);   // CROSS
-    psx_set_pressed(&g_dev.button_byte2, 5, (buttons & (1u << 1)) != 0);   // CIRCLE
-    psx_set_pressed(&g_dev.button_byte2, 7, (buttons & (1u << 2)) != 0);   // SQUARE
-    psx_set_pressed(&g_dev.button_byte2, 4, (buttons & (1u << 3)) != 0);   // TRIANGLE
-    psx_set_pressed(&g_dev.button_byte2, 2, (buttons & (1u << 4)) != 0);   // L1
-    psx_set_pressed(&g_dev.button_byte2, 3, (buttons & (1u << 5)) != 0);   // R1
-    psx_set_pressed(&g_dev.button_byte2, 0, (buttons & (1u << 6)) != 0);   // L2
-    psx_set_pressed(&g_dev.button_byte2, 1, (buttons & (1u << 7)) != 0);   // R2
-    psx_set_pressed(&g_dev.button_byte1, 0, (buttons & (1u << 8)) != 0);   // SELECT
-    psx_set_pressed(&g_dev.button_byte1, 3, (buttons & (1u << 9)) != 0);   // START
-    psx_set_pressed(&g_dev.button_byte1, 1, (buttons & (1u << 10)) != 0);  // L3
-    psx_set_pressed(&g_dev.button_byte1, 2, (buttons & (1u << 11)) != 0);  // R3
+    // DDR panel mapping: B0-B3 = P1 directions, B4-B7 = P2 directions.
+    // Indices are defined in config.h (DDR_PAD_P1_UP etc.) for easy remapping.
+    psx_set_pressed(&g_dev.button_byte1,    4, (buttons & (1u << DDR_PAD_P1_UP))    != 0);
+    psx_set_pressed(&g_dev.button_byte1,    6, (buttons & (1u << DDR_PAD_P1_DOWN))  != 0);
+    psx_set_pressed(&g_dev.button_byte1,    7, (buttons & (1u << DDR_PAD_P1_LEFT))  != 0);
+    psx_set_pressed(&g_dev.button_byte1,    5, (buttons & (1u << DDR_PAD_P1_RIGHT)) != 0);
 
-    if (hat0 <= 7u) {
-        set_dpad_from_hat(hat0);
-    } else if (hat0 == 0x0Fu && hat1 <= 7u) {
-        // hat1 is treated as fallback only when hat0 is explicitly "not present".
-        set_dpad_from_hat(hat1);
-    } else {
-        // Calibrate axis center from the first seen neutral sample to avoid stuck D-pad.
-        if (!g_dev.arduino_axis_center_valid) {
-            g_dev.arduino_center_x = x;
-            g_dev.arduino_center_y = y;
-            g_dev.arduino_axis_center_valid = true;
-        }
-        set_dpad_from_axes_u16_centered(x, y, g_dev.arduino_center_x, g_dev.arduino_center_y);
-    }
+    psx_set_pressed(&g_dev.p2_button_byte1, 4, (buttons & (1u << DDR_PAD_P2_UP))    != 0);
+    psx_set_pressed(&g_dev.p2_button_byte1, 6, (buttons & (1u << DDR_PAD_P2_DOWN))  != 0);
+    psx_set_pressed(&g_dev.p2_button_byte1, 7, (buttons & (1u << DDR_PAD_P2_LEFT))  != 0);
+    psx_set_pressed(&g_dev.p2_button_byte1, 5, (buttons & (1u << DDR_PAD_P2_RIGHT)) != 0);
+
+    (void) hat0; (void) hat1;
 
     g_dev.lx = scale_u16_to_u8(x);
     g_dev.ly = scale_u16_to_u8(y);
@@ -681,6 +674,16 @@ void usb_host_get_button_state(uint8_t* byte1, uint8_t* byte2)
     }
     if (byte2) {
         *byte2 = g_dev.button_byte2;
+    }
+}
+
+void usb_host_get_p2_button_state(uint8_t* byte1, uint8_t* byte2)
+{
+    if (byte1) {
+        *byte1 = g_dev.p2_button_byte1;
+    }
+    if (byte2) {
+        *byte2 = g_dev.p2_button_byte2;
     }
 }
 

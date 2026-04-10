@@ -26,6 +26,7 @@
 #include "config.h"
 #include "shared_state.h"
 #include "usb_host_input.h"
+#include "gpio_input.h"
 #include "psx_protocol.h"
 #include "flash_config.h"
 
@@ -218,6 +219,9 @@ int main(void)
     // Initialize USB Host for input devices
     usb_host_input_init();
 
+    // Initialize GPIO direct button input for P1
+    gpio_input_init();
+
     // Initialize shared state
     shared_state_init();
 
@@ -231,6 +235,8 @@ int main(void)
     // Button state variables
     uint8_t btn1 = 0xFF;
     uint8_t btn2 = 0xFF;
+    uint8_t p2btn1 = 0xFF;
+    uint8_t p2btn2 = 0xFF;
 
     // Print startup message
     print_startup_message();
@@ -289,9 +295,17 @@ int main(void)
         
         // Get current button state from USB device
         usb_host_get_button_state(&btn1, &btn2);
-        
+        usb_host_get_p2_button_state(&p2btn1, &p2btn2);
+
+        // Merge GPIO direct input into P1 (AND = either source can press)
+        uint8_t gpio_btn1, gpio_btn2;
+        gpio_input_read(&gpio_btn1, &gpio_btn2);
+        btn1 &= gpio_btn1;
+        btn2 &= gpio_btn2;
+
         // Write to shared state for Core 1
-        shared_state_write(btn1, btn2);
+        shared_state_write(0, btn1, btn2);
+        shared_state_write(1, p2btn1, p2btn2);
 
         // Update LED and statistics
         static uint64_t last_trans_count = 0;

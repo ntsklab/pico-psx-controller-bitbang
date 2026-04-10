@@ -43,6 +43,7 @@ add_executable(pico-psx-controller-bitbang
     src/xinput_host_driver.c
     src/shared_state.c
     src/flash_config.c
+    src/gpio_input.c
 )
 
 # Include directories
