@@ -31,12 +31,15 @@ typedef struct {
     bool connected;
     bool has_analog;
     bool xinput_custom_driver;
+    bool arduino_axis_center_valid;
     device_type_t type;
     uint8_t addr;
     uint8_t instance;
     uint8_t hid_protocol;
     uint16_t vid;
     uint16_t pid;
+    uint16_t arduino_center_x;
+    uint16_t arduino_center_y;
 
     uint8_t button_byte1;
     uint8_t button_byte2;
@@ -271,15 +274,42 @@ static void set_dpad_from_hat(uint8_t hat)
 
 static void set_dpad_from_axes_u16(uint16_t x, uint16_t y)
 {
-    if (x <= 341u) {
+    uint16_t low = 341u;
+    uint16_t high = 682u;
+
+    // Some devices report 16-bit full-range axes instead of 10-bit (0..1023).
+    if (x > 1023u || y > 1023u) {
+        low = 21845u;
+        high = 43690u;
+    }
+
+    if (x <= low) {
         psx_set_pressed(&g_dev.button_byte1, 7, true);
-    } else if (x >= 682u) {
+    } else if (x >= high) {
         psx_set_pressed(&g_dev.button_byte1, 5, true);
     }
 
-    if (y <= 341u) {
+    if (y <= low) {
         psx_set_pressed(&g_dev.button_byte1, 4, true);
-    } else if (y >= 682u) {
+    } else if (y >= high) {
+        psx_set_pressed(&g_dev.button_byte1, 6, true);
+    }
+}
+
+static void set_dpad_from_axes_u16_centered(uint16_t x, uint16_t y, uint16_t center_x, uint16_t center_y)
+{
+    uint16_t max_value = (x > 1023u || y > 1023u || center_x > 1023u || center_y > 1023u) ? 65535u : 1023u;
+    uint16_t threshold = (uint16_t) (max_value / 6u);
+
+    if (x + threshold < center_x) {
+        psx_set_pressed(&g_dev.button_byte1, 7, true);
+    } else if (x > center_x + threshold) {
+        psx_set_pressed(&g_dev.button_byte1, 5, true);
+    }
+
+    if (y + threshold < center_y) {
+        psx_set_pressed(&g_dev.button_byte1, 4, true);
+    } else if (y > center_y + threshold) {
         psx_set_pressed(&g_dev.button_byte1, 6, true);
     }
 }
@@ -434,10 +464,17 @@ static bool parse_arduino_joystick_report(uint8_t const* report, uint16_t len)
 
     if (hat0 <= 7u) {
         set_dpad_from_hat(hat0);
-    } else if (hat1 <= 7u) {
+    } else if (hat0 == 0x0Fu && hat1 <= 7u) {
+        // hat1 is treated as fallback only when hat0 is explicitly "not present".
         set_dpad_from_hat(hat1);
     } else {
-        set_dpad_from_axes_u16(x, y);
+        // Calibrate axis center from the first seen neutral sample to avoid stuck D-pad.
+        if (!g_dev.arduino_axis_center_valid) {
+            g_dev.arduino_center_x = x;
+            g_dev.arduino_center_y = y;
+            g_dev.arduino_axis_center_valid = true;
+        }
+        set_dpad_from_axes_u16_centered(x, y, g_dev.arduino_center_x, g_dev.arduino_center_y);
     }
 
     g_dev.lx = scale_u16_to_u8(x);
